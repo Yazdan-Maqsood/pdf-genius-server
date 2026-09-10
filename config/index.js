@@ -4,8 +4,8 @@ const config = {
   port: parseInt(process.env.PORT) || 5000,
   nodeEnv: process.env.NODE_ENV || 'development',
   
-  // CORS
-  corsOrigin: process.env.CORS_ORIGIN || 'https://pdf-genius-tawny.vercel.app',
+  // CORS - support multiple comma-separated origins
+  corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:3000',
   
   // Rate limiting
   rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
@@ -25,9 +25,10 @@ const config = {
   pdfImageQuality: parseInt(process.env.PDF_IMAGE_QUALITY) || 70,
   pdfDpi: parseInt(process.env.PDF_DPI) || 300,
   
-  // LibreOffice
+  // LibreOffice - default to 'soffice' for Linux compatibility
   libreOfficePath: process.env.LIBREOFFICE_PATH || 'soffice',
   libreOfficeTimeout: 60000,
+  
   // Logging
   logLevel: process.env.LOG_LEVEL || 'info',
   
