@@ -5,7 +5,7 @@ const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   
   // CORS
-  corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  corsOrigin: process.env.CORS_ORIGIN || 'https://pdf-genius-tawny.vercel.app',
   
   // Rate limiting
   rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
