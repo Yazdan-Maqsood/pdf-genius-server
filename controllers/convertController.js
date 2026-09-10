@@ -43,7 +43,9 @@ class ConvertController {
       }
 
       if (result.fileCount === 1) {
+        // ============================================
         // Single file - send directly
+        // ============================================
         const outputPath = result.outputPath || result.outputPaths[0];
 
         if (!fs.existsSync(outputPath)) {
@@ -51,7 +53,12 @@ class ConvertController {
         }
 
         const buffer = await FileHelper.readBuffer(outputPath);
-        const filename = path.basename(outputPath);
+
+        // ✅ Get base filename and clean it
+        let filename = path.basename(outputPath);
+
+        // ✅ Remove any trailing underscores/dots/spaces that may have been added
+        filename = filename.replace(/[_\s.]+$/g, "");
 
         // ✅ Determine content type based on extension
         const ext = path.extname(filename).toLowerCase();
@@ -73,15 +80,28 @@ class ConvertController {
           ".html": "text/html",
         };
 
-        const contentType =
-          contentTypes[ext] || "application/octet-stream";
+        const contentType = contentTypes[ext] || "application/octet-stream";
 
-        console.log(
-          "Sending file:",
-          filename,
-          "with content type:",
-          contentType,
-        );
+        // ✅ If no extension, add based on conversion type
+        if (!ext) {
+          const defaultExt =
+            {
+              pdf_to_word: ".docx",
+              pdf_to_excel: ".xlsx",
+              pdf_to_ppt: ".pptx",
+              pdf_to_jpg: ".jpg",
+              word_to_pdf: ".pdf",
+              excel_to_pdf: ".pdf",
+              ppt_to_pdf: ".pdf",
+              jpg_to_pdf: ".pdf",
+              html_to_pdf: ".pdf",
+              pdf_to_pdfa: ".pdf",
+            }[conversionType] || ".pdf";
+
+          filename = filename + defaultExt;
+        }
+
+        console.log("📎 Sending file:", filename);
 
         res.on("finish", async () => {
           if (result.outputDir) {
@@ -89,17 +109,12 @@ class ConvertController {
           }
         });
 
-        // Set headers
-        res.setHeader("Content-Type", contentType);
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${filename}"`,
-        );
-        res.setHeader("Content-Length", buffer.length);
-
-        return res.send(buffer);
+        // ✅ Use ResponseHelper.file() which handles all headers properly
+        return ResponseHelper.file(res, buffer, filename, contentType);
       } else if (result.fileCount > 1) {
+        // ============================================
         // Multiple files - create zip
+        // ============================================
         const zipPath = path.join(result.outputDir, "converted_files.zip");
 
         await new Promise((resolve, reject) => {
@@ -145,18 +160,18 @@ class ConvertController {
           zipFilename = "pdf_to_ppt.zip";
         } else if (conversionType === "pdf_to_pdfa") {
           zipFilename = "pdf_to_pdfa.zip";
+        } else if (conversionType === "split") {
+          zipFilename = "split_files.zip";
+        } else if (conversionType === "merge") {
+          zipFilename = "merged.pdf";
+        } else if (conversionType === "compress") {
+          zipFilename = "compressed.pdf";
         }
 
-        console.log("Sending ZIP:", zipFilename);
+        console.log("📦 Sending ZIP:", zipFilename);
 
-        // Set content type to zip
-        res.setHeader("Content-Type", "application/zip");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${zipFilename}"`,
-        );
-
-        return res.send(buffer);
+        // ✅ Use ResponseHelper.file() for ZIP as well
+        return ResponseHelper.file(res, buffer, zipFilename, "application/zip");
       }
     } catch (error) {
       console.error("\n========== CONVERSION ERROR ==========");
