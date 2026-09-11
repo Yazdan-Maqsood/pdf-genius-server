@@ -1,42 +1,63 @@
-FROM node:18-slim
+FROM node:18-bullseye-slim
+
+# Prevent Debian prompts during installation
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice \
     libreoffice-writer \
     libreoffice-calc \
     libreoffice-impress \
+    libreoffice-core \
     tesseract-ocr \
     tesseract-ocr-eng \
     python3 \
     python3-pip \
     python3-venv \
+    python3-dev \
+    build-essential \
     fonts-dejavu \
     fonts-liberation \
     fonts-noto \
+    fonts-noto-cjk \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python packages
+# Verify LibreOffice installation
+RUN which soffice && soffice --version
+
+# Install Python packages for PDF operations
 RUN pip3 install --no-cache-dir \
     pdf2docx \
     pymupdf \
     pdfplumber \
     python-pptx \
+    python-docx \
     openpyxl \
     pytesseract \
     Pillow
 
+# Set working directory
 WORKDIR /app
 
+# Copy package files
 COPY package*.json ./
+
+# Install Node dependencies
 RUN npm install --production
 
+# Copy source code
 COPY . .
 
+# Create required directories
 RUN mkdir -p uploads/pdf uploads/images uploads/office uploads/processed \
     temp/merge temp/split temp/compress temp/convert \
     logs
 
+# Expose port (Render sets PORT env var)
 EXPOSE 5000
 
+# Start server
 CMD ["npm", "start"]

@@ -4,7 +4,7 @@ const config = {
   port: parseInt(process.env.PORT) || 5000,
   nodeEnv: process.env.NODE_ENV || 'development',
   
-  // CORS - support multiple comma-separated origins
+  // CORS
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:3000',
   
   // Rate limiting
@@ -25,9 +25,11 @@ const config = {
   pdfImageQuality: parseInt(process.env.PDF_IMAGE_QUALITY) || 70,
   pdfDpi: parseInt(process.env.PDF_DPI) || 300,
   
-  // LibreOffice - default to 'soffice' for Linux compatibility
+  // LibreOffice
+  // Windows: C:\Program Files\LibreOffice\program\soffice.exe
+  // Linux/Docker: soffice (in PATH)
   libreOfficePath: process.env.LIBREOFFICE_PATH || 'soffice',
-  libreOfficeTimeout: 60000,
+  libreOfficeTimeout: 180000,
   
   // Logging
   logLevel: process.env.LOG_LEVEL || 'info',
