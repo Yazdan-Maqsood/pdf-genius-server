@@ -580,74 +580,218 @@ class OfficeService {
 
   async pptToPdf(filePath, outputPath) {
     try {
-      console.log("PowerPoint conversion started for:", filePath);
-      console.log("Using LibreOffice for conversion...");
+      console.log("\n===== PPT TO PDF CONVERSION =====");
+      console.log("Input:", filePath);
+      console.log("Output:", outputPath);
 
-      const { exec } = require("child_process");
-      const util = require("util");
-      const execPromise = util.promisify(exec);
-      const path = require("path");
       const fs = require("fs-extra");
-      const config = require("../config");
+      const path = require("path");
+      const { PDFDocument, rgb } = require("pdf-lib");
 
-      // Create temp directory for LibreOffice output
-      const tempDir = path.join(path.dirname(outputPath), "libreoffice_temp");
-      fs.ensureDirSync(tempDir);
+      // ✅ Helper to sanitize text for WinAnsi encoding
+      const sanitizeText = (text) => {
+        if (!text || typeof text !== "string") return "";
 
-      // Get LibreOffice path
-      const libreOfficePath = config.libreOfficePath || "soffice";
+        return text
+          .replace(/[\u2190-\u21FF]/g, "->") // Arrows
+          .replace(/[\u2500-\u257F]/g, "-") // Box drawing
+          .replace(/[\u2580-\u259F]/g, "") // Block elements
+          .replace(/[\u2600-\u26FF]/g, "") // Misc symbols
+          .replace(/[\u2700-\u27BF]/g, "") // Dingbats
+          .replace(/[\uE000-\uF8FF]/g, "") // Private use
+          .replace(/[\u2018\u2019]/g, "'") // Smart single quotes
+          .replace(/[\u201C\u201D]/g, '"') // Smart double quotes
+          .replace(/[\u2013\u2014]/g, "-") // En/Em dashes
+          .replace(/[\u2026]/g, "...") // Ellipsis
+          .replace(/[\u00A0]/g, " ") // Non-breaking space
+          .replace(/[\u00B0]/g, " degrees ") // Degree symbol
+          .replace(/[\u00B1]/g, "+/-") // Plus-minus
+          .replace(/[\u00D7]/g, "x") // Multiplication
+          .replace(/[\u00F7]/g, "/") // Division
+          .replace(/[\u2022\u25CF\u25CB]/g, "*") // Bullets
+          .replace(/[\u00A9]/g, "(c)") // Copyright
+          .replace(/[\u00AE]/g, "(r)") // Registered
+          .replace(/[\u2122]/g, "(tm)") // Trademark
+          .replace(/[\u20AC]/g, "EUR") // Euro
+          .replace(/[\u00A3]/g, "GBP") // Pound
+          .replace(/[\u00A5]/g, "JPY") // Yen
+          .replace(/[\u2192]/g, "->") // Right arrow specifically
+          .replace(/[\u2190]/g, "<-") // Left arrow specifically
+          .replace(/[^\x20-\x7E\n\r\t]/g, "") // Remove non-ASCII
+          .trim();
+      };
 
-      // Build conversion command
-      const command = `"${libreOfficePath}" --headless --convert-to pdf --outdir "${tempDir}" "${filePath}"`;
+      // Extract text from PPTX using JSZip
+      const JSZip = require("jszip");
+      const zip = new JSZip();
+      const fileBuffer = fs.readFileSync(filePath);
+      const zipContent = await zip.loadAsync(fileBuffer);
 
-      console.log("Running command:", command);
-
-      try {
-        // Execute LibreOffice conversion
-        const { stdout, stderr } = await execPromise(command, {
-          timeout: 60000,
-          maxBuffer: 1024 * 1024 * 10, // 10MB buffer
+      const slideFiles = Object.keys(zipContent.files)
+        .filter((name) => name.match(/^ppt\/slides\/slide\d+\.xml$/))
+        .sort((a, b) => {
+          const numA = parseInt(a.match(/slide(\d+)\.xml/)[1]);
+          const numB = parseInt(b.match(/slide(\d+)\.xml/)[1]);
+          return numA - numB;
         });
 
-        if (stderr) {
-          console.log("LibreOffice stderr:", stderr);
+      console.log("Found slide files:", slideFiles.length);
+
+      const slidesContent = [];
+
+      for (let i = 0; i < slideFiles.length; i++) {
+        const slideFile = slideFiles[i];
+        const slideXml = await zipContent.files[slideFile].async("string");
+
+        const allTexts = [];
+        const textRegex = /<a:t>([^<]*)<\/a:t>/g;
+        let match;
+
+        while ((match = textRegex.exec(slideXml)) !== null) {
+          let text = match[1]
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .trim();
+
+          if (text.length > 0) {
+            allTexts.push(text);
+          }
         }
 
-        console.log("LibreOffice conversion completed");
+        const title = allTexts[0] || `Slide ${i + 1}`;
+        const content = allTexts.slice(1).join("\n");
 
-        // Find the converted PDF
-        const inputBaseName = path.basename(filePath, path.extname(filePath));
-        const convertedPdfPath = path.join(tempDir, `${inputBaseName}.pdf`);
-
-        if (fs.existsSync(convertedPdfPath)) {
-          // Copy to output path
-          await fs.copy(convertedPdfPath, outputPath);
-          console.log("PDF copied to output path");
-
-          // Clean up temp directory
-          await fs.remove(tempDir);
-
-          return outputPath;
-        } else {
-          throw new Error(
-            "Converted PDF not found after LibreOffice conversion",
-          );
-        }
-      } catch (libreOfficeError) {
-        console.error(
-          "LibreOffice conversion failed:",
-          libreOfficeError.message,
-        );
-
-        // Clean up temp directory
-        await fs.remove(tempDir).catch(() => {});
-
-        // Fallback to text extraction
-        console.log("Falling back to text extraction...");
-        return await this.extractPptTextToPdf(filePath, outputPath);
+        slidesContent.push({ title, content });
       }
+
+      console.log("Total slides:", slidesContent.length);
+
+      // Create PDF
+      const pdfDoc = await PDFDocument.create();
+      const font = await pdfDoc.embedFont("Helvetica");
+      const boldFont = await pdfDoc.embedFont("Helvetica-Bold");
+
+      const pageWidth = 841.89;
+      const pageHeight = 595.28;
+      const margin = 50;
+      const lineHeight = 16;
+      const fontSize = 11;
+      const titleSize = 20;
+
+      for (
+        let slideIndex = 0;
+        slideIndex < slidesContent.length;
+        slideIndex++
+      ) {
+        const slide = slidesContent[slideIndex];
+        const page = pdfDoc.addPage([pageWidth, pageHeight]);
+
+        // Background
+        page.drawRectangle({
+          x: 0,
+          y: 0,
+          width: pageWidth,
+          height: pageHeight,
+          color: rgb(0.98, 0.98, 0.98),
+        });
+
+        // ✅ Sanitize title
+        const title = sanitizeText(slide.title || `Slide ${slideIndex + 1}`);
+        if (title) {
+          page.drawText(title.substring(0, 80), {
+            x: margin,
+            y: pageHeight - margin - titleSize,
+            size: titleSize,
+            font: boldFont,
+            color: rgb(0.2, 0.3, 0.6),
+          });
+        }
+
+        // Divider line
+        page.drawLine({
+          start: { x: margin, y: pageHeight - margin - titleSize - 15 },
+          end: {
+            x: pageWidth - margin,
+            y: pageHeight - margin - titleSize - 15,
+          },
+          thickness: 2,
+          color: rgb(0.3, 0.4, 0.7),
+        });
+
+        // ✅ Sanitize content
+        const content = sanitizeText(slide.content || "");
+        let yPosition = pageHeight - margin - titleSize - 35;
+
+        if (content) {
+          const words = content.split(/\s+/);
+          let line = "";
+
+          for (const word of words) {
+            const testLine = line ? `${line} ${word}` : word;
+            const textWidth = font.widthOfTextAtSize(testLine, fontSize);
+
+            if (textWidth > pageWidth - margin * 2) {
+              if (yPosition >= margin + lineHeight) {
+                try {
+                  page.drawText(line, {
+                    x: margin,
+                    y: yPosition,
+                    size: fontSize,
+                    font: font,
+                    color: rgb(0.2, 0.2, 0.2),
+                  });
+                } catch (drawError) {
+                  console.warn(
+                    "Skipping line due to encoding error:",
+                    drawError.message,
+                  );
+                }
+                yPosition -= lineHeight;
+              }
+              line = word;
+            } else {
+              line = testLine;
+            }
+          }
+
+          if (line && yPosition >= margin + lineHeight) {
+            try {
+              page.drawText(line, {
+                x: margin,
+                y: yPosition,
+                size: fontSize,
+                font: font,
+                color: rgb(0.2, 0.2, 0.2),
+              });
+            } catch (drawError) {
+              console.warn("Skipping final line:", drawError.message);
+            }
+          }
+        }
+
+        // Slide number
+        page.drawText(`Slide ${slideIndex + 1} of ${slidesContent.length}`, {
+          x: pageWidth - margin - 150,
+          y: 25,
+          size: 10,
+          font: font,
+          color: rgb(0.5, 0.5, 0.5),
+        });
+      }
+
+      // Save PDF
+      const pdfBytes = await pdfDoc.save();
+      await fs.writeFile(outputPath, pdfBytes);
+
+      console.log("✅ PDF created successfully");
+      console.log("================================\n");
+
+      return outputPath;
     } catch (error) {
-      console.error("PowerPoint conversion failed:", error);
+      console.error("PPT to PDF failed:", error);
       throw new Error(`PowerPoint conversion failed: ${error.message}`);
     }
   }
