@@ -1,6 +1,6 @@
-FROM node:18-bullseye-slim
+FROM node:18-bookworm-slim
 
-# Prevent Debian prompts during installation
+# Prevent Debian prompts
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Verify LibreOffice installation
 RUN which soffice && soffice --version
 
-# Install Python packages for PDF operations
+# Install Python packages
 RUN pip3 install --no-cache-dir \
     pdf2docx \
     pymupdf \
@@ -56,8 +56,6 @@ RUN mkdir -p uploads/pdf uploads/images uploads/office uploads/processed \
     temp/merge temp/split temp/compress temp/convert \
     logs
 
-# Expose port (Render sets PORT env var)
 EXPOSE 5000
 
-# Start server
 CMD ["npm", "start"]
