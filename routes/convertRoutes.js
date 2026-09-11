@@ -9,6 +9,7 @@ router.post('/',
   uploadLimiter,
   uploadMultiple.array('files', 20), 
   validateFileUpload,
+  validateOfficeFileSize,  
   convertController.convert
 );
 

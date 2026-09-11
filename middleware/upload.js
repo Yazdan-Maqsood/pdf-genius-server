@@ -23,7 +23,6 @@ const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     let uploadPath = path.join(config.uploadDir, 'office');
     
-    // Determine upload directory based on file type
     if (file.mimetype === 'application/pdf') {
       uploadPath = path.join(config.uploadDir, 'pdf');
     } else if (file.mimetype.startsWith('image/')) {
@@ -64,7 +63,6 @@ const fileFilter = (req, file, cb) => {
     'text/html'
   ];
   
-  // Also check by extension
   const allowedExtensions = [
     '.pdf', '.jpg', '.jpeg', '.png', 
     '.doc', '.docx', 
@@ -85,12 +83,38 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
+// ✅ Naya: File size limits per type
+// Office files (PPT/Word/Excel) ke liye kam limit (kyunki LibreOffice heavy hai)
+// Images/PDF ke liye zyada limit
+const FILE_SIZE_LIMITS = {
+  office: 5 * 1024 * 1024,      // 5 MB for Office files (PPT, Word, Excel)
+  image: 20 * 1024 * 1024,       // 20 MB for images
+  pdf: 50 * 1024 * 1024,         // 50 MB for PDFs
+  default: 10 * 1024 * 1024      // 10 MB default
+};
+
+// Custom file size check middleware
+const checkFileSize = (fileType) => {
+  return (req, res, next) => {
+    // Get the limit based on file type
+    let limit = FILE_SIZE_LIMITS.default;
+    
+    // Check the actual file being uploaded
+    // We need to check during multer processing
+    
+    // For simplicity, use the max limit
+    // Multer itself will check limits, but we can add validation after
+    next();
+  };
+};
+
 // Create multer instances
+// ✅ REVISED: Lower file size for office files
 const uploadSingle = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: {
-    fileSize: config.maxFileSize
+    fileSize: 50 * 1024 * 1024  // 50 MB max (multer's hard limit)
   }
 });
 
@@ -98,7 +122,7 @@ const uploadMultiple = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: {
-    fileSize: config.maxFileSize,
+    fileSize: 50 * 1024 * 1024,
     files: config.maxFilesPerRequest
   }
 });
@@ -107,13 +131,40 @@ const uploadAny = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: {
-    fileSize: config.maxFileSize,
+    fileSize: 50 * 1024 * 1024,
     files: config.maxFilesPerRequest
   }
 });
 
+// ✅ NEW: Post-upload validation for office files
+const validateOfficeFileSize = (req, res, next) => {
+  if (!req.file && !req.files) return next();
+  
+  const files = req.files ? (Array.isArray(req.files) ? req.files : Object.values(req.files).flat()) : [req.file];
+  
+  for (const file of files) {
+    if (!file) continue;
+    
+    const ext = path.extname(file.originalname).toLowerCase();
+    const isOfficeFile = ['.ppt', '.pptx', '.doc', '.docx', '.xls', '.xlsx'].includes(ext);
+    
+    if (isOfficeFile && file.size > 5 * 1024 * 1024) {
+      // Delete the uploaded file
+      fs.remove(file.path).catch(() => {});
+      
+      return res.status(400).json({
+        success: false,
+        error: `Office files (PPT/Word/Excel) must be smaller than 5 MB. Your file is ${(file.size / 1024 / 1024).toFixed(2)} MB. For larger files, please upgrade to our premium plan.`
+      });
+    }
+  }
+  
+  next();
+};
+
 module.exports = {
   uploadSingle,
   uploadMultiple,
-  uploadAny
+  uploadAny,
+  validateOfficeFileSize
 };
