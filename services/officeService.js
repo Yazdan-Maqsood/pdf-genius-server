@@ -5,1032 +5,10 @@ const mammoth = require("mammoth");
 const FileHelper = require("../utils/fileHelper");
 
 class OfficeService {
-  async wordToPdf(filePath, outputPath) {
-    try {
-      console.log(`Converting Word document: ${filePath}`);
-
-      // Read the docx file
-      const docxBuffer = await fs.readFile(filePath);
-
-      // Extract HTML with styles from docx using mammoth
-      const result = await mammoth.convertToHtml(
-        { buffer: docxBuffer },
-        {
-          // Preserve formatting options
-          convertImage: mammoth.images.imgElement(async (image) => {
-            const imageBuffer = await image.read();
-            const base64 = imageBuffer.toString("base64");
-            const contentType = image.contentType || "image/png";
-            return {
-              src: `data:${contentType};base64,${base64}`,
-            };
-          }),
-          styleMap: [
-            "p[style-name='Heading 1'] => h1:fresh",
-            "p[style-name='Heading 2'] => h2:fresh",
-            "p[style-name='Heading 3'] => h3:fresh",
-            "p[style-name='Title'] => h1.title:fresh",
-            "p[style-name='Subtitle'] => h2.subtitle:fresh",
-            "r[style-name='Strong'] => strong",
-            "r[style-name='Emphasis'] => em",
-            "table => table",
-          ],
-        },
-      );
-
-      const htmlContent = result.value;
-      console.log("Word content extracted with formatting");
-      console.log("HTML length:", htmlContent.length);
-
-      // Create PDF from HTML using puppeteer
-      await this.htmlToPdfWithPuppeteer(htmlContent, outputPath);
-
-      console.log(`Word to PDF conversion complete: ${outputPath}`);
-      return outputPath;
-    } catch (error) {
-      console.error("Error in wordToPdf:", error);
-      // Fallback to simple text extraction
-      await this.wordToPdfFallback(filePath, outputPath);
-      return outputPath;
-    }
-  }
-
-  async htmlToPdfWithPuppeteer(htmlContent, outputPath) {
-    try {
-      console.log("Converting HTML to PDF using Puppeteer...");
-
-      const puppeteer = require("puppeteer");
-
-      // Launch browser
-      const browser = await puppeteer.launch({
-        headless: "new",
-        args: ["--no-sandbox", "--disable-setuid-sandbox"],
-      });
-
-      const page = await browser.newPage();
-
-      // Create full HTML with styling
-      const fullHtml = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="UTF-8">
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              margin: 2cm;
-              line-height: 1.5;
-            }
-            h1 { font-size: 24pt; margin-bottom: 20px; }
-            h2 { font-size: 18pt; margin-bottom: 15px; }
-            h3 { font-size: 14pt; margin-bottom: 10px; }
-            p { margin-bottom: 10px; text-align: justify; }
-            table { 
-              border-collapse: collapse; 
-              width: 100%;
-              margin-bottom: 15px;
-            }
-            table, th, td {
-              border: 1px solid #ddd;
-            }
-            th, td {
-              padding: 8px;
-              text-align: left;
-            }
-            th {
-              background-color: #f2f2f2;
-              font-weight: bold;
-            }
-            img {
-              max-width: 100%;
-              height: auto;
-            }
-            ul, ol {
-              margin-bottom: 10px;
-              padding-left: 30px;
-            }
-            strong { font-weight: bold; }
-            em { font-style: italic; }
-            .title { font-size: 28pt; font-weight: bold; text-align: center; margin-bottom: 20px; }
-            .subtitle { font-size: 18pt; text-align: center; color: #666; margin-bottom: 30px; }
-          </style>
-        </head>
-        <body>
-          ${htmlContent}
-        </body>
-        </html>
-      `;
-
-      await page.setContent(fullHtml, { waitUntil: "networkidle0" });
-
-      // Generate PDF
-      await page.pdf({
-        path: outputPath,
-        format: "A4",
-        printBackground: true,
-        margin: {
-          top: "1cm",
-          right: "1cm",
-          bottom: "1cm",
-          left: "1cm",
-        },
-      });
-
-      await browser.close();
-      console.log("PDF created successfully with Puppeteer");
-    } catch (error) {
-      console.error("Puppeteer conversion failed:", error);
-      throw error;
-    }
-  }
-
-  async wordToPdfFallback(filePath, outputPath) {
-    try {
-      console.log("Using fallback method for Word to PDF...");
-
-      const docxBuffer = await fs.readFile(filePath);
-      const result = await mammoth.extractRawText({ buffer: docxBuffer });
-      const text = result.value;
-
-      // Create PDF with text
-      const pdfDoc = await PDFDocument.create();
-      const font = await pdfDoc.embedFont("Helvetica");
-      const boldFont = await pdfDoc.embedFont("Helvetica-Bold");
-
-      const pageWidth = 595.28;
-      const pageHeight = 841.89;
-      const margin = 50;
-      const lineHeight = 14;
-      const fontSize = 11;
-
-      let currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
-      let yPosition = pageHeight - margin;
-
-      // Split text into paragraphs
-      const paragraphs = text.split("\n").filter((p) => p.trim().length > 0);
-
-      for (const paragraph of paragraphs) {
-        // Check if paragraph is a heading
-        const isHeading =
-          paragraph.length < 100 && paragraph === paragraph.toUpperCase();
-        const currentFont = isHeading ? boldFont : font;
-        const currentSize = isHeading ? 16 : fontSize;
-
-        // Wrap text
-        const words = paragraph.split(" ");
-        let line = "";
-
-        for (const word of words) {
-          const testLine = line ? `${line} ${word}` : word;
-          const textWidth = currentFont.widthOfTextAtSize(
-            testLine,
-            currentSize,
-          );
-
-          if (textWidth > pageWidth - margin * 2) {
-            if (yPosition < margin + lineHeight) {
-              currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
-              yPosition = pageHeight - margin;
-            }
-
-            currentPage.drawText(line, {
-              x: margin,
-              y: yPosition,
-              size: currentSize,
-              font: currentFont,
-            });
-
-            yPosition -= lineHeight;
-            line = word;
-          } else {
-            line = testLine;
-          }
-        }
-
-        // Draw last line
-        if (line) {
-          if (yPosition < margin + lineHeight) {
-            currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
-            yPosition = pageHeight - margin;
-          }
-
-          currentPage.drawText(line, {
-            x: margin,
-            y: yPosition,
-            size: currentSize,
-            font: currentFont,
-          });
-          yPosition -= lineHeight;
-        }
-
-        // Extra space between paragraphs
-        yPosition -= 5;
-      }
-
-      const pdfBytes = await pdfDoc.save();
-      await fs.writeFile(outputPath, pdfBytes);
-      console.log("Fallback conversion complete");
-    } catch (error) {
-      console.error("Fallback conversion failed:", error);
-      throw error;
-    }
-  }
-
-  async excelToPdf(filePath, outputPath) {
-    try {
-      console.log("Excel conversion started for:", filePath);
-
-      const XLSX = require("xlsx");
-
-      // Read the Excel file
-      const workbook = XLSX.readFile(filePath);
-
-      // Get first sheet
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-
-      // Convert to CSV-like array
-      const data = XLSX.utils.sheet_to_json(sheet, {
-        header: 1,
-        defval: "",
-        raw: false,
-      });
-
-      // Create PDF
-      const { PDFDocument, rgb } = require("pdf-lib");
-      const pdfDoc = await PDFDocument.create();
-      const font = await pdfDoc.embedFont("Helvetica");
-      const boldFont = await pdfDoc.embedFont("Helvetica-Bold");
-
-      // Landscape A4
-      const pageWidth = 841.89;
-      const pageHeight = 595.28;
-      const margin = 40;
-      const rowHeight = 20;
-
-      let page = pdfDoc.addPage([pageWidth, pageHeight]);
-      let y = pageHeight - margin;
-
-      // Calculate columns
-      const numCols = Math.max(...data.map((row) => row.length));
-      const colWidth = (pageWidth - 2 * margin) / numCols;
-
-      // Draw each row
-      for (let rowIndex = 0; rowIndex < data.length; rowIndex++) {
-        const row = data[rowIndex];
-
-        // New page if needed
-        if (y < margin + rowHeight) {
-          page = pdfDoc.addPage([pageWidth, pageHeight]);
-          y = pageHeight - margin;
-        }
-
-        // Header background for first row
-        if (rowIndex === 0) {
-          page.drawRectangle({
-            x: margin,
-            y: y - rowHeight,
-            width: pageWidth - 2 * margin,
-            height: rowHeight,
-            color: rgb(0.85, 0.85, 0.85),
-          });
-        }
-
-        // Draw cells
-        for (let colIndex = 0; colIndex < numCols; colIndex++) {
-          const text = row[colIndex] ? String(row[colIndex]) : "";
-          page.drawText(text.substring(0, 40), {
-            x: margin + colIndex * colWidth + 2,
-            y: y - rowHeight + 5,
-            size: rowIndex === 0 ? 10 : 8,
-            font: rowIndex === 0 ? boldFont : font,
-          });
-        }
-
-        y -= rowHeight;
-      }
-
-      // Save
-      const pdfBytes = await pdfDoc.save();
-      await fs.writeFile(outputPath, pdfBytes);
-
-      console.log("Excel conversion completed successfully");
-      return outputPath;
-    } catch (error) {
-      console.error("Excel conversion failed:", error.message);
-      throw new Error(`Excel conversion failed: ${error.message}`);
-    }
-  }
-
-  async createSimplePdf(outputPath, title, message) {
-    try {
-      const { PDFDocument } = require("pdf-lib");
-      const pdfDoc = await PDFDocument.create();
-      const font = await pdfDoc.embedFont("Helvetica");
-
-      const page = pdfDoc.addPage([595.28, 841.89]);
-      page.drawText(title, {
-        x: 50,
-        y: 800,
-        size: 20,
-        font: font,
-      });
-
-      page.drawText(message || "Conversion failed", {
-        x: 50,
-        y: 770,
-        size: 12,
-        font: font,
-        maxWidth: 500,
-      });
-
-      const pdfBytes = await pdfDoc.save();
-      await fs.writeFile(outputPath, pdfBytes);
-    } catch (error) {
-      console.error("Error creating simple PDF:", error);
-    }
-  }
-
-  async createPdfFromTable(data, outputPath) {
-    try {
-      console.log("Creating PDF from Excel table data...");
-
-      const { PDFDocument, rgb } = require("pdf-lib");
-      const pdfDoc = await PDFDocument.create();
-
-      // Embed fonts
-      const font = await pdfDoc.embedFont("Helvetica");
-      const boldFont = await pdfDoc.embedFont("Helvetica-Bold");
-
-      // Page setup - Landscape for tables
-      const pageWidth = 841.89; // A4 landscape
-      const pageHeight = 595.28;
-      const margin = 40;
-      const headerHeight = 30;
-      const cellHeight = 22;
-      const fontSize = 8;
-      const headerFontSize = 10;
-
-      let currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
-      let yPosition = pageHeight - margin;
-
-      // Calculate number of columns
-      const numColumns = Math.max(...data.map((row) => row.length));
-      console.log(`Number of columns: ${numColumns}`);
-
-      // Calculate column widths
-      const tableWidth = pageWidth - margin * 2;
-      const columnWidth = tableWidth / numColumns;
-
-      // Draw header row
-      if (data.length > 0 && data[0]) {
-        // Header background
-        currentPage.drawRectangle({
-          x: margin,
-          y: yPosition - headerHeight,
-          width: tableWidth,
-          height: headerHeight,
-          color: rgb(0.85, 0.85, 0.85),
-        });
-
-        // Header text
-        for (let colIndex = 0; colIndex < numColumns; colIndex++) {
-          const cellText = data[0][colIndex] ? String(data[0][colIndex]) : "";
-          const xPosition = margin + colIndex * columnWidth;
-
-          currentPage.drawText(cellText.substring(0, 50), {
-            x: xPosition + 5,
-            y: yPosition - headerHeight + 5,
-            size: headerFontSize,
-            font: boldFont,
-          });
-        }
-
-        yPosition -= headerHeight;
-      }
-
-      // Draw data rows
-      for (let rowIndex = 1; rowIndex < data.length; rowIndex++) {
-        const row = data[rowIndex];
-
-        // Check if we need a new page
-        if (yPosition < margin + cellHeight) {
-          currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
-          yPosition = pageHeight - margin;
-
-          // Redraw header on new page
-          if (data[0]) {
-            currentPage.drawRectangle({
-              x: margin,
-              y: yPosition - headerHeight,
-              width: tableWidth,
-              height: headerHeight,
-              color: rgb(0.85, 0.85, 0.85),
-            });
-
-            for (let colIndex = 0; colIndex < numColumns; colIndex++) {
-              const cellText = data[0][colIndex]
-                ? String(data[0][colIndex])
-                : "";
-              const xPosition = margin + colIndex * columnWidth;
-
-              currentPage.drawText(cellText.substring(0, 50), {
-                x: xPosition + 5,
-                y: yPosition - headerHeight + 5,
-                size: headerFontSize,
-                font: boldFont,
-              });
-            }
-
-            yPosition -= headerHeight;
-          }
-        }
-
-        // Alternate row background
-        if (rowIndex % 2 === 0) {
-          currentPage.drawRectangle({
-            x: margin,
-            y: yPosition - cellHeight,
-            width: tableWidth,
-            height: cellHeight,
-            color: rgb(0.95, 0.95, 0.95),
-          });
-        }
-
-        // Draw cell data
-        for (let colIndex = 0; colIndex < numColumns; colIndex++) {
-          const cellText =
-            row[colIndex] !== undefined ? String(row[colIndex]) : "";
-          const xPosition = margin + colIndex * columnWidth;
-
-          currentPage.drawText(cellText.substring(0, 50), {
-            x: xPosition + 5,
-            y: yPosition - cellHeight + 5,
-            size: fontSize,
-            font: font,
-          });
-        }
-
-        yPosition -= cellHeight;
-      }
-
-      // Save PDF
-      const pdfBytes = await pdfDoc.save({
-        useObjectStreams: true,
-        addDefaultPage: false,
-      });
-
-      await fs.writeFile(outputPath, pdfBytes);
-      console.log(`PDF created: ${(pdfBytes.length / 1024).toFixed(2)} KB`);
-    } catch (error) {
-      console.error("Error creating PDF from table:", error);
-      throw error;
-    }
-  }
-
-  async createErrorPdf(outputPath, message) {
-    try {
-      const { PDFDocument } = require("pdf-lib");
-      const pdfDoc = await PDFDocument.create();
-      const font = await pdfDoc.embedFont("Helvetica");
-
-      const page = pdfDoc.addPage([595.28, 841.89]);
-      page.drawText("Conversion Error", {
-        x: 50,
-        y: 800,
-        size: 20,
-        font: font,
-      });
-
-      page.drawText(message, {
-        x: 50,
-        y: 770,
-        size: 12,
-        font: font,
-        maxWidth: 500,
-      });
-
-      const pdfBytes = await pdfDoc.save();
-      await fs.writeFile(outputPath, pdfBytes);
-    } catch (error) {
-      console.error("Error creating error PDF:", error);
-    }
-  }
-
-  async createPdfFromTable(data, outputPath) {
-    try {
-      const pdfDoc = await PDFDocument.create();
-      const font = await pdfDoc.embedFont("Helvetica");
-      const boldFont = await pdfDoc.embedFont("Helvetica-Bold");
-
-      const pageWidth = 841.89; // Landscape
-      const pageHeight = 595.28;
-      const margin = 40;
-      const cellHeight = 25;
-      const fontSize = 9;
-
-      let currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
-      let yPosition = pageHeight - margin;
-
-      const numColumns = data[0] ? data[0].length : 1;
-      const tableWidth = pageWidth - margin * 2;
-      const columnWidth = tableWidth / numColumns;
-
-      for (let rowIndex = 0; rowIndex < data.length; rowIndex++) {
-        const row = data[rowIndex];
-
-        if (yPosition < margin + cellHeight) {
-          currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
-          yPosition = pageHeight - margin;
-        }
-
-        // Header row background
-        if (rowIndex === 0) {
-          currentPage.drawRectangle({
-            x: margin,
-            y: yPosition - cellHeight,
-            width: tableWidth,
-            height: cellHeight,
-            color: { r: 0.85, g: 0.85, b: 0.85 },
-          });
-        }
-
-        for (let colIndex = 0; colIndex < numColumns; colIndex++) {
-          const cellText = row[colIndex] ? String(row[colIndex]) : "";
-          const xPosition = margin + colIndex * columnWidth;
-
-          currentPage.drawText(cellText.substring(0, 40), {
-            x: xPosition + 5,
-            y: yPosition - 5,
-            size: rowIndex === 0 ? 10 : fontSize,
-            font: rowIndex === 0 ? boldFont : font,
-          });
-        }
-
-        yPosition -= cellHeight;
-      }
-
-      const pdfBytes = await pdfDoc.save();
-      await fs.writeFile(outputPath, pdfBytes);
-    } catch (error) {
-      console.error("Error creating PDF from table:", error);
-      throw error;
-    }
-  }
-
-  async pptToPdf(filePath, outputPath) {
-    try {
-      console.log("\n===== PPT TO PDF CONVERSION =====");
-      console.log("Input:", filePath);
-      console.log("Output:", outputPath);
-
-      const fs = require("fs-extra");
-      const path = require("path");
-      const { PDFDocument, rgb } = require("pdf-lib");
-
-      // ✅ Helper to sanitize text for WinAnsi encoding
-      const sanitizeText = (text) => {
-        if (!text || typeof text !== "string") return "";
-
-        return text
-          .replace(/[\u2190-\u21FF]/g, "->") // Arrows
-          .replace(/[\u2500-\u257F]/g, "-") // Box drawing
-          .replace(/[\u2580-\u259F]/g, "") // Block elements
-          .replace(/[\u2600-\u26FF]/g, "") // Misc symbols
-          .replace(/[\u2700-\u27BF]/g, "") // Dingbats
-          .replace(/[\uE000-\uF8FF]/g, "") // Private use
-          .replace(/[\u2018\u2019]/g, "'") // Smart single quotes
-          .replace(/[\u201C\u201D]/g, '"') // Smart double quotes
-          .replace(/[\u2013\u2014]/g, "-") // En/Em dashes
-          .replace(/[\u2026]/g, "...") // Ellipsis
-          .replace(/[\u00A0]/g, " ") // Non-breaking space
-          .replace(/[\u00B0]/g, " degrees ") // Degree symbol
-          .replace(/[\u00B1]/g, "+/-") // Plus-minus
-          .replace(/[\u00D7]/g, "x") // Multiplication
-          .replace(/[\u00F7]/g, "/") // Division
-          .replace(/[\u2022\u25CF\u25CB]/g, "*") // Bullets
-          .replace(/[\u00A9]/g, "(c)") // Copyright
-          .replace(/[\u00AE]/g, "(r)") // Registered
-          .replace(/[\u2122]/g, "(tm)") // Trademark
-          .replace(/[\u20AC]/g, "EUR") // Euro
-          .replace(/[\u00A3]/g, "GBP") // Pound
-          .replace(/[\u00A5]/g, "JPY") // Yen
-          .replace(/[\u2192]/g, "->") // Right arrow specifically
-          .replace(/[\u2190]/g, "<-") // Left arrow specifically
-          .replace(/[^\x20-\x7E\n\r\t]/g, "") // Remove non-ASCII
-          .trim();
-      };
-
-      // Extract text from PPTX using JSZip
-      const JSZip = require("jszip");
-      const zip = new JSZip();
-      const fileBuffer = fs.readFileSync(filePath);
-      const zipContent = await zip.loadAsync(fileBuffer);
-
-      const slideFiles = Object.keys(zipContent.files)
-        .filter((name) => name.match(/^ppt\/slides\/slide\d+\.xml$/))
-        .sort((a, b) => {
-          const numA = parseInt(a.match(/slide(\d+)\.xml/)[1]);
-          const numB = parseInt(b.match(/slide(\d+)\.xml/)[1]);
-          return numA - numB;
-        });
-
-      console.log("Found slide files:", slideFiles.length);
-
-      const slidesContent = [];
-
-      for (let i = 0; i < slideFiles.length; i++) {
-        const slideFile = slideFiles[i];
-        const slideXml = await zipContent.files[slideFile].async("string");
-
-        const allTexts = [];
-        const textRegex = /<a:t>([^<]*)<\/a:t>/g;
-        let match;
-
-        while ((match = textRegex.exec(slideXml)) !== null) {
-          let text = match[1]
-            .replace(/&amp;/g, "&")
-            .replace(/&lt;/g, "<")
-            .replace(/&gt;/g, ">")
-            .replace(/&quot;/g, '"')
-            .replace(/&#39;/g, "'")
-            .trim();
-
-          if (text.length > 0) {
-            allTexts.push(text);
-          }
-        }
-
-        const title = allTexts[0] || `Slide ${i + 1}`;
-        const content = allTexts.slice(1).join("\n");
-
-        slidesContent.push({ title, content });
-      }
-
-      console.log("Total slides:", slidesContent.length);
-
-      // Create PDF
-      const pdfDoc = await PDFDocument.create();
-      const font = await pdfDoc.embedFont("Helvetica");
-      const boldFont = await pdfDoc.embedFont("Helvetica-Bold");
-
-      const pageWidth = 841.89;
-      const pageHeight = 595.28;
-      const margin = 50;
-      const lineHeight = 16;
-      const fontSize = 11;
-      const titleSize = 20;
-
-      for (
-        let slideIndex = 0;
-        slideIndex < slidesContent.length;
-        slideIndex++
-      ) {
-        const slide = slidesContent[slideIndex];
-        const page = pdfDoc.addPage([pageWidth, pageHeight]);
-
-        // Background
-        page.drawRectangle({
-          x: 0,
-          y: 0,
-          width: pageWidth,
-          height: pageHeight,
-          color: rgb(0.98, 0.98, 0.98),
-        });
-
-        // ✅ Sanitize title
-        const title = sanitizeText(slide.title || `Slide ${slideIndex + 1}`);
-        if (title) {
-          page.drawText(title.substring(0, 80), {
-            x: margin,
-            y: pageHeight - margin - titleSize,
-            size: titleSize,
-            font: boldFont,
-            color: rgb(0.2, 0.3, 0.6),
-          });
-        }
-
-        // Divider line
-        page.drawLine({
-          start: { x: margin, y: pageHeight - margin - titleSize - 15 },
-          end: {
-            x: pageWidth - margin,
-            y: pageHeight - margin - titleSize - 15,
-          },
-          thickness: 2,
-          color: rgb(0.3, 0.4, 0.7),
-        });
-
-        // ✅ Sanitize content
-        const content = sanitizeText(slide.content || "");
-        let yPosition = pageHeight - margin - titleSize - 35;
-
-        if (content) {
-          const words = content.split(/\s+/);
-          let line = "";
-
-          for (const word of words) {
-            const testLine = line ? `${line} ${word}` : word;
-            const textWidth = font.widthOfTextAtSize(testLine, fontSize);
-
-            if (textWidth > pageWidth - margin * 2) {
-              if (yPosition >= margin + lineHeight) {
-                try {
-                  page.drawText(line, {
-                    x: margin,
-                    y: yPosition,
-                    size: fontSize,
-                    font: font,
-                    color: rgb(0.2, 0.2, 0.2),
-                  });
-                } catch (drawError) {
-                  console.warn(
-                    "Skipping line due to encoding error:",
-                    drawError.message,
-                  );
-                }
-                yPosition -= lineHeight;
-              }
-              line = word;
-            } else {
-              line = testLine;
-            }
-          }
-
-          if (line && yPosition >= margin + lineHeight) {
-            try {
-              page.drawText(line, {
-                x: margin,
-                y: yPosition,
-                size: fontSize,
-                font: font,
-                color: rgb(0.2, 0.2, 0.2),
-              });
-            } catch (drawError) {
-              console.warn("Skipping final line:", drawError.message);
-            }
-          }
-        }
-
-        // Slide number
-        page.drawText(`Slide ${slideIndex + 1} of ${slidesContent.length}`, {
-          x: pageWidth - margin - 150,
-          y: 25,
-          size: 10,
-          font: font,
-          color: rgb(0.5, 0.5, 0.5),
-        });
-      }
-
-      // Save PDF
-      const pdfBytes = await pdfDoc.save();
-      await fs.writeFile(outputPath, pdfBytes);
-
-      console.log("✅ PDF created successfully");
-      console.log("================================\n");
-
-      return outputPath;
-    } catch (error) {
-      console.error("PPT to PDF failed:", error);
-      throw new Error(`PowerPoint conversion failed: ${error.message}`);
-    }
-  }
-
-  async renderPptAsImages(filePath, outputPath) {
-    const { exec } = require("child_process");
-    const util = require("util");
-    const execPromise = util.promisify(exec);
-    const path = require("path");
-    const fs = require("fs-extra");
-    const sharp = require("sharp");
-
-    try {
-      console.log("Rendering PPT slides as images...");
-
-      // Create temp directory for images
-      const tempDir = path.join(path.dirname(outputPath), "temp_images");
-      fs.ensureDirSync(tempDir);
-
-      // Convert PPT to PDF first using LibreOffice
-      const pdfTempPath = path.join(tempDir, "temp.pdf");
-
-      // Try LibreOffice command
-      const libreofficeCommand = `soffice --headless --convert-to pdf --outdir "${tempDir}" "${filePath}"`;
-
-      try {
-        await execPromise(libreofficeCommand, { timeout: 60000 });
-        console.log("Converted PPT to PDF using LibreOffice");
-
-        // If successful, copy the PDF
-        const convertedPdfPath = path.join(
-          tempDir,
-          path.basename(filePath, path.extname(filePath)) + ".pdf",
-        );
-        if (fs.existsSync(convertedPdfPath)) {
-          await fs.copy(convertedPdfPath, outputPath);
-          await fs.remove(tempDir);
-          return outputPath;
-        }
-      } catch (libreOfficeError) {
-        console.error("LibreOffice failed:", libreOfficeError.message);
-      }
-
-      // If LibreOffice not available, try alternative methods
-      console.log("LibreOffice not available, trying alternative methods...");
-
-      // Method: Extract images from PPTX
-      const JSZip = require("jszip");
-      const zip = new JSZip();
-      const fileBuffer = fs.readFileSync(filePath);
-      const zipContent = await zip.loadAsync(fileBuffer);
-
-      // Find all slide images
-      const imageFiles = Object.keys(zipContent.files).filter((name) =>
-        name.match(/^ppt\/slides\/slide\d+\.xml$/),
-      );
-
-      // Render each slide as image (simplified)
-      const { PDFDocument, rgb } = require("pdf-lib");
-      const pdfDoc = await PDFDocument.create();
-
-      for (let i = 0; i < imageFiles.length; i++) {
-        const slideFile = imageFiles[i];
-        const slideXml = await zipContent.files[slideFile].async("string");
-
-        // Extract slide dimensions
-        const slideMatch = slideXml.match(/<p:sldSz cx="(\d+)" cy="(\d+)"/);
-        let slideWidth = 12192000; // Default PPTX width in EMU
-        let slideHeight = 6858000; // Default PPTX height in EMU
-
-        if (slideMatch) {
-          slideWidth = parseInt(slideMatch[1]);
-          slideHeight = parseInt(slideMatch[2]);
-        }
-
-        // Convert EMU to points (914400 EMU = 1 inch = 72 points)
-        const pageWidth = (slideWidth / 914400) * 72;
-        const pageHeight = (slideHeight / 914400) * 72;
-
-        // Create page for this slide
-        const page = pdfDoc.addPage([pageWidth, pageHeight]);
-
-        // Try to render slide background
-        const bgMatch = slideXml.match(
-          /<p:bg>[\s\S]*?<a:solidFill>[\s\S]*?<a:srgbClr val="([A-Fa-f0-9]{6})"/,
-        );
-        if (bgMatch) {
-          const bgColor = bgMatch[1];
-          const r = parseInt(bgColor.substring(0, 2), 16) / 255;
-          const g = parseInt(bgColor.substring(2, 4), 16) / 255;
-          const b = parseInt(bgColor.substring(4, 6), 16) / 255;
-
-          page.drawRectangle({
-            x: 0,
-            y: 0,
-            width: pageWidth,
-            height: pageHeight,
-            color: rgb(r, g, b),
-          });
-        }
-
-        // Extract and draw images from the slide
-        const imageRegex = /<a:blip r:embed="([^"]+)"/g;
-        let imageMatch;
-
-        while ((imageMatch = imageRegex.exec(slideXml)) !== null) {
-          const imageId = imageMatch[1];
-          const imagePath = `ppt/media/${imageId}`;
-
-          if (zipContent.files[imagePath]) {
-            try {
-              const imageBuffer =
-                await zipContent.files[imagePath].async("nodebuffer");
-
-              // Process image with sharp
-              const processedImage = await sharp(imageBuffer)
-                .jpeg({ quality: 90 })
-                .toBuffer();
-
-              // Embed image in PDF
-              const embeddedImage = await pdfDoc.embedJpg(processedImage);
-              page.drawImage(embeddedImage, {
-                x: 50,
-                y: 50,
-                width: pageWidth - 100,
-                height: pageHeight - 100,
-              });
-            } catch (imageError) {
-              console.error(
-                `Failed to process image ${imagePath}:`,
-                imageError.message,
-              );
-            }
-          }
-        }
-      }
-
-      await fs.remove(tempDir);
-      return outputPath;
-    } catch (error) {
-      console.error("Image rendering failed:", error);
-      throw error;
-    }
-  }
-
-  async extractPptTextToPdf(filePath, outputPath) {
-    // This is the existing text extraction method
-    // (Keep the code from previous implementation)
-    try {
-      console.log("Extracting text from PowerPoint...");
-
-      const JSZip = require("jszip");
-      const zip = new JSZip();
-      const fileBuffer = fs.readFileSync(filePath);
-      const zipContent = await zip.loadAsync(fileBuffer);
-
-      const slideFiles = Object.keys(zipContent.files)
-        .filter((name) => name.match(/^ppt\/slides\/slide\d+\.xml$/))
-        .sort((a, b) => {
-          const numA = parseInt(a.match(/slide(\d+)\.xml/)[1]);
-          const numB = parseInt(b.match(/slide(\d+)\.xml/)[1]);
-          return numA - numB;
-        });
-
-      const slidesContent = [];
-
-      for (let i = 0; i < slideFiles.length; i++) {
-        const slideFile = slideFiles[i];
-        const slideXml = await zipContent.files[slideFile].async("string");
-
-        const allTexts = [];
-        const textRegex = /<a:t>([^<]*)<\/a:t>/g;
-        let match;
-
-        while ((match = textRegex.exec(slideXml)) !== null) {
-          let text = match[1]
-            .replace(/&amp;/g, "&")
-            .replace(/&lt;/g, "<")
-            .replace(/&gt;/g, ">")
-            .replace(/&quot;/g, '"')
-            .replace(/&#39;/g, "'")
-            .trim();
-
-          if (text.length > 0) {
-            allTexts.push(text);
-          }
-        }
-
-        const title = allTexts[0] || `Slide ${i + 1}`;
-        const content = allTexts.slice(1).join("\n");
-
-        slidesContent.push({ title, content });
-      }
-
-      // Create PDF from extracted text
-      const { PDFDocument, rgb } = require("pdf-lib");
-      const pdfDoc = await PDFDocument.create();
-      const font = await pdfDoc.embedFont("Helvetica");
-      const boldFont = await pdfDoc.embedFont("Helvetica-Bold");
-
-      const pageWidth = 841.89;
-      const pageHeight = 595.28;
-      const margin = 50;
-
-      for (let i = 0; i < slidesContent.length; i++) {
-        const slide = slidesContent[i];
-        const page = pdfDoc.addPage([pageWidth, pageHeight]);
-
-        // Draw title
-        page.drawText(slide.title.substring(0, 80), {
-          x: margin,
-          y: pageHeight - margin,
-          size: 20,
-          font: boldFont,
-        });
-
-        // Draw content
-        if (slide.content) {
-          page.drawText(slide.content.substring(0, 2000), {
-            x: margin,
-            y: pageHeight - margin - 40,
-            size: 11,
-            font: font,
-            maxWidth: pageWidth - margin * 2,
-          });
-        }
-      }
-
-      const pdfBytes = await pdfDoc.save();
-      await fs.writeFile(outputPath, pdfBytes);
-
-      return outputPath;
-    } catch (error) {
-      console.error("Text extraction failed:", error);
-      throw error;
-    }
-  }
-
-  async convertWithLibreOffice(inputPath, outputPath, targetFormat = "docx") {
+  // ============================================
+  // GENERIC LIBREOFFICE CONVERTER (CORE)
+  // ============================================
+  async convertWithLibreOffice(inputPath, outputPath, targetFormat = "pdf") {
     try {
       console.log(`\n===== LIBREOFFICE CONVERSION (${targetFormat}) =====`);
       console.log("Input:", inputPath);
@@ -1039,58 +17,99 @@ class OfficeService {
       const { exec } = require("child_process");
       const util = require("util");
       const execPromise = util.promisify(exec);
-      const path = require("path");
-      const fs = require("fs-extra");
       const config = require("../config");
 
-      // Create temp directory
+      // Verify input
+      if (!fs.existsSync(inputPath)) {
+        throw new Error(`Input file not found: ${inputPath}`);
+      }
+
+      // Create ISOLATED temp directory (prevents concurrent request conflicts)
       const tempDir = path.join(
         path.dirname(outputPath),
-        `lo_temp_${Date.now()}`,
+        `lo_temp_${Date.now()}_${Math.random().toString(36).substring(7)}`,
       );
       fs.ensureDirSync(tempDir);
 
+      // Unique user profile per conversion (prevents LibreOffice locking)
+      const userProfileDir = path.join(tempDir, `lo_profile_${Date.now()}`);
+      fs.ensureDirSync(userProfileDir);
+
       // Get LibreOffice path
       const libreOfficePath = config.libreOfficePath || "soffice";
+      console.log("LibreOffice path:", libreOfficePath);
 
-      // Build command
-      const command = `"${libreOfficePath}" --headless --convert-to ${targetFormat} --outdir "${tempDir}" "${inputPath}"`;
+      // Build command with unique user profile
+      const command = [
+        `"${libreOfficePath}"`,
+        "--headless",
+        "--norestore",
+        "--nolockcheck",
+        `-env:UserInstallation=file:///${userProfileDir.replace(/\\/g, "/")}`,
+        `--convert-to ${targetFormat}`,
+        `--outdir "${tempDir}"`,
+        `"${inputPath}"`,
+      ].join(" ");
 
-      console.log("Running command:", command);
+      console.log("Running:", command.substring(0, 250) + "...");
 
       try {
         const { stdout, stderr } = await execPromise(command, {
-          timeout: 120000,
-          maxBuffer: 1024 * 1024 * 10,
+          timeout: 180000,
+          maxBuffer: 1024 * 1024 * 50,
+          windowsHide: true,
         });
 
-        if (stderr && !stderr.includes("Warning")) {
-          console.log("LibreOffice stderr:", stderr);
+        if (stdout) {
+          console.log("LibreOffice stdout:", stdout.substring(0, 300));
+        }
+        if (
+          stderr &&
+          !stderr.toLowerCase().includes("warning") &&
+          !stderr.toLowerCase().includes("javaldx")
+        ) {
+          console.log("LibreOffice stderr:", stderr.substring(0, 300));
         }
 
         // Find the converted file
+        const files = fs.readdirSync(tempDir);
+        console.log("Files in temp:", files.join(", "));
+
         const inputBaseName = path.basename(inputPath, path.extname(inputPath));
-        const possibleFiles = fs.readdirSync(tempDir);
-        console.log("Files in temp dir:", possibleFiles);
+        const expectedFile = `${inputBaseName}.${targetFormat}`;
 
-        const convertedFile = possibleFiles.find(
-          (f) => f.startsWith(inputBaseName) && f.endsWith(`.${targetFormat}`),
-        );
+        let convertedPath = null;
 
-        if (!convertedFile) {
+        if (files.includes(expectedFile)) {
+          convertedPath = path.join(tempDir, expectedFile);
+        } else {
+          const matchingFile = files.find(
+            (f) =>
+              f.endsWith(`.${targetFormat}`) && !f.startsWith("lo_profile"),
+          );
+          if (matchingFile) {
+            convertedPath = path.join(tempDir, matchingFile);
+          }
+        }
+
+        if (!convertedPath || !fs.existsSync(convertedPath)) {
           throw new Error(
-            `Converted file not found. Expected: ${inputBaseName}.${targetFormat}`,
+            `Converted file not found. Expected: ${expectedFile}. Found: ${files.join(", ")}`,
           );
         }
 
-        const convertedPath = path.join(tempDir, convertedFile);
+        // Copy to output
         await fs.copy(convertedPath, outputPath);
 
         // Cleanup
-        await fs.remove(tempDir);
+        await fs.remove(tempDir).catch(() => {});
 
-        console.log("✅ LibreOffice conversion successful");
-        console.log("Output:", outputPath);
+        if (!fs.existsSync(outputPath)) {
+          throw new Error("Output file was not created");
+        }
+
+        const outputSize = fs.statSync(outputPath).size;
+        console.log(`✅ LibreOffice conversion successful: ${(outputSize / 1024).toFixed(2)} KB`);
         console.log("=====================================\n");
 
         return outputPath;
@@ -1104,15 +123,81 @@ class OfficeService {
     }
   }
 
+  // ============================================
+  // WORD TO PDF (LibreOffice - Perfect Formatting)
+  // ============================================
+  async wordToPdf(filePath, outputPath) {
+    try {
+      console.log("\n===== WORD TO PDF (LibreOffice) =====");
+      console.log("Input:", filePath);
+      console.log("Output:", outputPath);
+
+      await this.convertWithLibreOffice(filePath, outputPath, "pdf");
+
+      const outputSize = fs.statSync(outputPath).size;
+      console.log(`✅ Word to PDF complete: ${(outputSize / 1024).toFixed(2)} KB`);
+      console.log("====================================\n");
+
+      return outputPath;
+    } catch (error) {
+      console.error("❌ Word to PDF failed:", error.message);
+      throw new Error(`Word conversion failed: ${error.message}`);
+    }
+  }
+
+  // ============================================
+  // EXCEL TO PDF (LibreOffice - Perfect Tables)
+  // ============================================
+  async excelToPdf(filePath, outputPath) {
+    try {
+      console.log("\n===== EXCEL TO PDF (LibreOffice) =====");
+      console.log("Input:", filePath);
+      console.log("Output:", outputPath);
+
+      await this.convertWithLibreOffice(filePath, outputPath, "pdf");
+
+      const outputSize = fs.statSync(outputPath).size;
+      console.log(`✅ Excel to PDF complete: ${(outputSize / 1024).toFixed(2)} KB`);
+      console.log("====================================\n");
+
+      return outputPath;
+    } catch (error) {
+      console.error("❌ Excel to PDF failed:", error.message);
+      throw new Error(`Excel conversion failed: ${error.message}`);
+    }
+  }
+
+  // ============================================
+  // PPT TO PDF (LibreOffice - Perfect Visuals)
+  // ============================================
+  async pptToPdf(filePath, outputPath) {
+    try {
+      console.log("\n===== PPT TO PDF (LibreOffice) =====");
+      console.log("Input:", filePath);
+      console.log("Output:", outputPath);
+
+      await this.convertWithLibreOffice(filePath, outputPath, "pdf");
+
+      const outputSize = fs.statSync(outputPath).size;
+      console.log(`✅ PPT to PDF complete: ${(outputSize / 1024).toFixed(2)} KB`);
+      console.log("====================================\n");
+
+      return outputPath;
+    } catch (error) {
+      console.error("❌ PPT to PDF failed:", error.message);
+      throw new Error(`PowerPoint conversion failed: ${error.message}`);
+    }
+  }
+
+  // ============================================
+  // PDF TO WORD (pdf2docx via Python)
+  // ============================================
   async pdfToWord(pdfPath, outputPath) {
     try {
       console.log("\n===== PDF TO WORD (pdf2docx) =====");
+      console.log("Input:", pdfPath);
+      console.log("Output:", outputPath);
 
-      const { spawn } = require("child_process");
-      const path = require("path");
-      const fs = require("fs-extra");
-
-      // Verify input
       if (!fs.existsSync(pdfPath)) {
         throw new Error(`Input PDF not found: ${pdfPath}`);
       }
@@ -1120,7 +205,6 @@ class OfficeService {
       const inputSize = fs.statSync(pdfPath).size;
       console.log("Input size:", (inputSize / 1024).toFixed(2), "KB");
 
-      // Verify script
       const pythonScript = path.resolve(
         __dirname,
         "..",
@@ -1133,17 +217,14 @@ class OfficeService {
         throw new Error(`Python script not found: ${pythonScript}`);
       }
 
-      // Ensure output directory exists
       const outputDir = path.dirname(outputPath);
       fs.ensureDirSync(outputDir);
 
-      // Run Python
       const result = await this.runPythonScript(pythonScript, [
         pdfPath,
         outputPath,
       ]);
 
-      // Verify output
       if (!fs.existsSync(outputPath)) {
         throw new Error("Output file was not created by Python script");
       }
@@ -1159,427 +240,15 @@ class OfficeService {
     }
   }
 
-  // Helper method to run Python script
-  runPythonScript(scriptPath, args) {
-    return new Promise((resolve, reject) => {
-      const { spawn } = require("child_process");
-      const path = require("path");
-      const fs = require("fs-extra");
-
-      // Verify script exists
-      if (!fs.existsSync(scriptPath)) {
-        return reject(new Error(`Python script not found at: ${scriptPath}`));
-      }
-
-      console.log("🐍 Python script:", scriptPath);
-      console.log("🐍 Args:", args);
-
-      // Verify input file exists (args[0] is input PDF)
-      if (args[0] && !fs.existsSync(args[0])) {
-        return reject(new Error(`Input PDF not found: ${args[0]}`));
-      }
-
-      // Try multiple python commands
-      const pythonCommands = ["python", "py", "python3"];
-
-      const tryPython = (index) => {
-        if (index >= pythonCommands.length) {
-          return reject(
-            new Error("Python not found. Tried: python, py, python3"),
-          );
-        }
-
-        const pythonCmd = pythonCommands[index];
-        console.log(`\n🐍 Attempt ${index + 1}: ${pythonCmd}`);
-
-        const child = spawn(pythonCmd, [scriptPath, ...args], {
-          stdio: ["pipe", "pipe", "pipe"],
-          cwd: path.join(__dirname, ".."), // Server root
-          env: { ...process.env, PYTHONIOENCODING: "utf-8" },
-        });
-
-        let stdout = "";
-        let stderr = "";
-        let spawnFailed = false;
-
-        child.stdout.on("data", (data) => {
-          const text = data.toString();
-          stdout += text;
-          console.log("📤 stdout:", text.trim());
-        });
-
-        child.stderr.on("data", (data) => {
-          const text = data.toString();
-          stderr += text;
-          console.log("📥 stderr:", text.trim());
-        });
-
-        child.on("error", (error) => {
-          spawnFailed = true;
-          console.error(`❌ ${pythonCmd} spawn failed:`, error.message);
-
-          // If command not found, try next
-          if (error.code === "ENOENT") {
-            tryPython(index + 1);
-          } else {
-            reject(new Error(`${pythonCmd} error: ${error.message}`));
-          }
-        });
-
-        child.on("close", (code) => {
-          if (spawnFailed) return;
-
-          console.log(`🔚 Exit code: ${code}`);
-
-          // Try to parse JSON from stdout
-          try {
-            const jsonMatch = stdout.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              const result = JSON.parse(jsonMatch[0]);
-
-              if (!result.success) {
-                const errorMsg = result.error || "Unknown Python error";
-                const traceback = result.traceback || "";
-                console.error("❌ Python error:", errorMsg);
-                if (traceback) console.error("❌ Traceback:", traceback);
-
-                return reject(new Error(errorMsg));
-              }
-
-              console.log("✅ Python conversion successful");
-              resolve(result);
-            } else {
-              // No JSON - use exit code
-              if (code === 0) {
-                resolve({ success: true, output: stdout });
-              } else {
-                reject(new Error(stderr || `Python exited with code ${code}`));
-              }
-            }
-          } catch (parseError) {
-            console.error("❌ JSON parse failed:", parseError.message);
-            console.error("❌ Raw stdout:", stdout);
-
-            if (code === 0) {
-              resolve({ success: true, output: stdout });
-            } else {
-              reject(
-                new Error(
-                  stderr || stdout || `Parse failed: ${parseError.message}`,
-                ),
-              );
-            }
-          }
-        });
-      };
-
-      tryPython(0);
-    });
-  }
-
-  // ✅ Smart text parsing and formatting
-  parseAndFormatText(text) {
-    console.log("Parsing and formatting text...");
-
-    // Clean up text
-    let cleaned = text
-      .replace(/Scanned with CamScanner/gi, "")
-      .replace(/Scanned by CamScanner/gi, "")
-      .replace(/\r\n/g, "\n")
-      .replace(/\r/g, "\n");
-
-    // Split into lines
-    const lines = cleaned.split("\n");
-
-    const elements = [];
-    let currentParagraph = [];
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const trimmed = line.trim();
-
-      // Empty line - flush paragraph and add spacing
-      if (trimmed.length === 0) {
-        if (currentParagraph.length > 0) {
-          const paraText = currentParagraph.join(" ").trim();
-          if (paraText.length > 0) {
-            elements.push({
-              type: "paragraph",
-              text: this.smartParagraph(paraText),
-            });
-          }
-          currentParagraph = [];
-        }
-        elements.push({ type: "empty" });
-        continue;
-      }
-
-      // ✅ Detect headings
-      const headingInfo = this.detectHeading(trimmed, i, lines);
-
-      if (headingInfo.isHeading) {
-        // Flush current paragraph
-        if (currentParagraph.length > 0) {
-          const paraText = currentParagraph.join(" ").trim();
-          if (paraText.length > 0) {
-            elements.push({
-              type: "paragraph",
-              text: this.smartParagraph(paraText),
-            });
-          }
-          currentParagraph = [];
-        }
-
-        elements.push({
-          type: headingInfo.level === 1 ? "heading1" : "heading2",
-          text: trimmed,
-        });
-        continue;
-      }
-
-      // ✅ Detect bullet points
-      if (/^[\u2022\u2023\u25E6\u2043\u2219•▪▫◦‣⁃\-*+]\s+/.test(trimmed)) {
-        if (currentParagraph.length > 0) {
-          const paraText = currentParagraph.join(" ").trim();
-          if (paraText.length > 0) {
-            elements.push({
-              type: "paragraph",
-              text: this.smartParagraph(paraText),
-            });
-          }
-          currentParagraph = [];
-        }
-
-        elements.push({
-          type: "listItem",
-          text: trimmed.replace(
-            /^[\u2022\u2023\u25E6\u2043\u2219•▪▫◦‣⁃\-*+]\s+/,
-            "",
-          ),
-        });
-        continue;
-      }
-
-      // ✅ Detect numbered lists
-      if (/^\d+[\.\)]\s+/.test(trimmed)) {
-        if (currentParagraph.length > 0) {
-          const paraText = currentParagraph.join(" ").trim();
-          if (paraText.length > 0) {
-            elements.push({
-              type: "paragraph",
-              text: this.smartParagraph(paraText),
-            });
-          }
-          currentParagraph = [];
-        }
-
-        elements.push({
-          type: "numberedItem",
-          text: trimmed.replace(/^\d+[\.\)]\s+/, ""),
-        });
-        continue;
-      }
-
-      // ✅ Regular text - accumulate into paragraph
-      currentParagraph.push(trimmed);
-
-      // If line ends with period and is long enough, treat as paragraph end
-      if (trimmed.endsWith(".") && trimmed.length > 100) {
-        const paraText = currentParagraph.join(" ").trim();
-        elements.push({
-          type: "paragraph",
-          text: this.smartParagraph(paraText),
-        });
-        currentParagraph = [];
-      }
-    }
-
-    // Flush remaining paragraph
-    if (currentParagraph.length > 0) {
-      const paraText = currentParagraph.join(" ").trim();
-      if (paraText.length > 0) {
-        elements.push({
-          type: "paragraph",
-          text: this.smartParagraph(paraText),
-        });
-      }
-    }
-
-    console.log(`Parsed ${elements.length} elements`);
-    return elements;
-  }
-
-  // ✅ Smart paragraph formatting
-  smartParagraph(text) {
-    // Fix common issues
-    let result = text
-      // Join hyphenated line breaks
-      .replace(/(\w+)-\s+(\w+)/g, "$1$2")
-      // Fix spacing after punctuation
-      .replace(/([.!?,;:])([A-Z])/g, "$1 $2")
-      // Fix multiple spaces
-      .replace(/\s+/g, " ")
-      // Capitalize first letter of sentences
-      .replace(/(^\w|\.\s+\w)/g, (m) => m.toUpperCase())
-      .trim();
-
-    return result;
-  }
-
-  // ✅ Detect if a line is a heading
-  detectHeading(line, index, allLines) {
-    // Too long to be heading
-    if (line.length > 100) {
-      return { isHeading: false };
-    }
-
-    // Too short
-    if (line.length < 3) {
-      return { isHeading: false };
-    }
-
-    // Ends with period - probably not heading
-    if (line.endsWith(".")) {
-      return { isHeading: false };
-    }
-
-    // Check patterns
-
-    // Pattern 1: All uppercase and short
-    const isAllCaps = line === line.toUpperCase() && /[A-Z]/.test(line);
-    if (isAllCaps && line.length < 80) {
-      return { isHeading: true, level: 1 };
-    }
-
-    // Pattern 2: Starts with number and period (like "1. Introduction")
-    if (/^\d+\.\s+[A-Z]/.test(line) && line.length < 80) {
-      return { isHeading: true, level: 2 };
-    }
-
-    // Pattern 3: Short line that stands alone with capital letters
-    if (line.length < 60 && /^[A-Z]/.test(line) && !line.endsWith(",")) {
-      // Check if previous line is empty (heading indicator)
-      const prevLine = index > 0 ? allLines[index - 1] : "";
-      const nextLine = index < allLines.length - 1 ? allLines[index + 1] : "";
-
-      if (prevLine.trim() === "" && nextLine.trim() !== "") {
-        // Check word count
-        const wordCount = line.split(/\s+/).length;
-        if (wordCount <= 8) {
-          return { isHeading: true, level: 2 };
-        }
-      }
-    }
-
-    // Pattern 4: Chapter/Section indicators
-    if (/^(chapter|section|part|appendix)\s+\d+/i.test(line)) {
-      return { isHeading: true, level: 1 };
-    }
-
-    return { isHeading: false };
-  }
-
-  async extractTextWithOCR(pdfPath) {
-    try {
-      console.log("Starting OCR process...");
-
-      const Tesseract = require("tesseract.js");
-      const { createCanvas } = require("canvas");
-      const fs = require("fs-extra");
-      const path = require("path");
-      const os = require("os");
-
-      // Load pdfjs
-      let pdfjsLib;
-      try {
-        pdfjsLib = require("pdfjs-dist/legacy/build/pdf.js");
-      } catch (err) {
-        pdfjsLib = require("pdfjs-dist");
-      }
-
-      // Read PDF
-      const data = new Uint8Array(await fs.readFile(pdfPath));
-      const loadingTask = pdfjsLib.getDocument({
-        data,
-        disableFontFace: true,
-      });
-
-      const pdf = await loadingTask.promise;
-      console.log("PDF loaded for OCR. Pages:", pdf.numPages);
-
-      // Create temp directory for images
-      const tempDir = path.join(os.tmpdir(), `ocr_${Date.now()}`);
-      fs.ensureDirSync(tempDir);
-
-      let allText = "";
-
-      // Process each page
-      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-        console.log(`OCR on page ${pageNum}/${pdf.numPages}...`);
-
-        const page = await pdf.getPage(pageNum);
-        const viewport = page.getViewport({ scale: 2.0 });
-
-        const canvas = createCanvas(viewport.width, viewport.height);
-        const context = canvas.getContext("2d");
-
-        context.fillStyle = "white";
-        context.fillRect(0, 0, viewport.width, viewport.height);
-
-        await page.render({
-          canvasContext: context,
-          viewport: viewport,
-          background: "white",
-        }).promise;
-
-        // Save page as image
-        const imagePath = path.join(tempDir, `page_${pageNum}.png`);
-        const imageBuffer = canvas.toBuffer("image/png");
-        await fs.writeFile(imagePath, imageBuffer);
-
-        // Run OCR on the image
-        console.log(`Recognizing text on page ${pageNum}...`);
-        const { data: ocrResult } = await Tesseract.recognize(
-          imagePath,
-          "eng",
-          {
-            logger: (info) => {
-              if (info.status === "recognizing text") {
-                const percent = Math.round(info.progress * 100);
-                console.log(`OCR progress (page ${pageNum}): ${percent}%`);
-              }
-            },
-          },
-        );
-
-        const pageText = ocrResult.text || "";
-        console.log(`Page ${pageNum} text length: ${pageText.length}`);
-
-        allText += pageText + "\n\n";
-      }
-
-      // Cleanup
-      await fs.remove(tempDir);
-
-      console.log("OCR complete. Total text length:", allText.length);
-
-      return allText;
-    } catch (error) {
-      console.error("OCR failed:", error);
-      throw new Error(`OCR failed: ${error.message}`);
-    }
-  }
-
+  // ============================================
+  // PDF TO EXCEL (pdfplumber via Python)
+  // ============================================
   async pdfToExcel(pdfPath, outputPath) {
     try {
       console.log("\n===== PDF TO EXCEL (pdfplumber) =====");
       console.log("Input:", pdfPath);
       console.log("Output:", outputPath);
 
-      const path = require("path");
-      const fs = require("fs-extra");
-
-      // Verify input
       if (!fs.existsSync(pdfPath)) {
         throw new Error(`Input PDF not found: ${pdfPath}`);
       }
@@ -1587,44 +256,35 @@ class OfficeService {
       const inputSize = fs.statSync(pdfPath).size;
       console.log("Input size:", (inputSize / 1024).toFixed(2), "KB");
 
-      // Verify script
       const pythonScript = path.resolve(
         __dirname,
         "..",
         "python",
         "pdf_to_excel.py",
       );
-      console.log("Python script:", pythonScript);
 
       if (!fs.existsSync(pythonScript)) {
         throw new Error(`Python script not found: ${pythonScript}`);
       }
 
-      // Ensure output directory
       const outputDir = path.dirname(outputPath);
       fs.ensureDirSync(outputDir);
 
-      // Run Python script
       const result = await this.runPythonScript(pythonScript, [
         pdfPath,
         outputPath,
       ]);
 
-      console.log("Python result:", result);
-
       if (!result.success) {
         throw new Error(result.error || "Python conversion failed");
       }
 
-      // Verify output
       if (!fs.existsSync(outputPath)) {
         throw new Error("Output Excel file not created");
       }
 
       const outputSize = fs.statSync(outputPath).size;
-      console.log(
-        `✅ Excel file created: ${(outputSize / 1024).toFixed(2)} KB`,
-      );
+      console.log(`✅ Excel file created: ${(outputSize / 1024).toFixed(2)} KB`);
       console.log(
         `   Pages: ${result.pages || "N/A"}, Tables: ${result.tables || "N/A"}`,
       );
@@ -1637,14 +297,14 @@ class OfficeService {
     }
   }
 
+  // ============================================
+  // PDF TO PPT (Hybrid: text or image mode)
+  // ============================================
   async pdfToPpt(pdfPath, outputPath, mode = "text") {
     try {
       console.log("\n===== PDF TO PPT =====");
       console.log("Input:", pdfPath);
       console.log("Mode:", mode);
-
-      const path = require("path");
-      const fs = require("fs-extra");
 
       if (!fs.existsSync(pdfPath)) {
         throw new Error(`Input PDF not found: ${pdfPath}`);
@@ -1664,7 +324,6 @@ class OfficeService {
       const outputDir = path.dirname(outputPath);
       fs.ensureDirSync(outputDir);
 
-      // Pass mode as 3rd argument
       const result = await this.runPythonScript(pythonScript, [
         pdfPath,
         outputPath,
@@ -1688,6 +347,288 @@ class OfficeService {
     } catch (error) {
       console.error("❌ PDF to PPT failed:", error.message);
       throw error;
+    }
+  }
+
+  // ============================================
+  // HTML TO PDF (Puppeteer)
+  // ============================================
+  async htmlToPdfWithPuppeteer(htmlContent, outputPath) {
+    try {
+      console.log("Converting HTML to PDF using Puppeteer...");
+
+      const puppeteer = require("puppeteer");
+
+      const browser = await puppeteer.launch({
+        headless: "new",
+        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      });
+
+      const page = await browser.newPage();
+
+      const fullHtml = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <style>
+            body { font-family: Arial, sans-serif; margin: 2cm; line-height: 1.5; }
+            h1 { font-size: 24pt; margin-bottom: 20px; }
+            h2 { font-size: 18pt; margin-bottom: 15px; }
+            h3 { font-size: 14pt; margin-bottom: 10px; }
+            p { margin-bottom: 10px; text-align: justify; }
+            table { border-collapse: collapse; width: 100%; margin-bottom: 15px; }
+            table, th, td { border: 1px solid #ddd; }
+            th, td { padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; font-weight: bold; }
+            img { max-width: 100%; height: auto; }
+            ul, ol { margin-bottom: 10px; padding-left: 30px; }
+          </style>
+        </head>
+        <body>${htmlContent}</body>
+        </html>
+      `;
+
+      await page.setContent(fullHtml, { waitUntil: "networkidle0" });
+
+      await page.pdf({
+        path: outputPath,
+        format: "A4",
+        printBackground: true,
+        margin: { top: "1cm", right: "1cm", bottom: "1cm", left: "1cm" },
+      });
+
+      await browser.close();
+      console.log("PDF created successfully with Puppeteer");
+    } catch (error) {
+      console.error("Puppeteer conversion failed:", error);
+      throw error;
+    }
+  }
+
+  // ============================================
+  // PYTHON SCRIPT RUNNER (used by pdf2docx, pdfplumber, etc.)
+  // ============================================
+  runPythonScript(scriptPath, args) {
+    return new Promise((resolve, reject) => {
+      const { spawn } = require("child_process");
+
+      if (!fs.existsSync(scriptPath)) {
+        return reject(new Error(`Python script not found at: ${scriptPath}`));
+      }
+
+      console.log("🐍 Python script:", scriptPath);
+      console.log("🐍 Args:", args);
+
+      if (args[0] && !fs.existsSync(args[0])) {
+        return reject(new Error(`Input file not found: ${args[0]}`));
+      }
+
+      const pythonCommands = ["python", "py", "python3"];
+
+      const tryPython = (index) => {
+        if (index >= pythonCommands.length) {
+          return reject(
+            new Error("Python not found. Tried: python, py, python3"),
+          );
+        }
+
+        const pythonCmd = pythonCommands[index];
+        console.log(`\n🐍 Attempt ${index + 1}: ${pythonCmd}`);
+
+        const child = spawn(pythonCmd, [scriptPath, ...args], {
+          stdio: ["pipe", "pipe", "pipe"],
+          cwd: path.join(__dirname, ".."),
+          env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+        });
+
+        let stdout = "";
+        let stderr = "";
+        let spawnFailed = false;
+
+        child.stdout.on("data", (data) => {
+          const text = data.toString();
+          stdout += text;
+          console.log("📤 stdout:", text.trim());
+        });
+
+        child.stderr.on("data", (data) => {
+          const text = data.toString();
+          stderr += text;
+          console.log("📥 stderr:", text.trim());
+        });
+
+        child.on("error", (error) => {
+          spawnFailed = true;
+          console.error(`❌ ${pythonCmd} spawn failed:`, error.message);
+
+          if (error.code === "ENOENT") {
+            tryPython(index + 1);
+          } else {
+            reject(new Error(`${pythonCmd} error: ${error.message}`));
+          }
+        });
+
+        child.on("close", (code) => {
+          if (spawnFailed) return;
+
+          console.log(`🔚 Exit code: ${code}`);
+
+          try {
+            const jsonMatch = stdout.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const result = JSON.parse(jsonMatch[0]);
+
+              if (!result.success) {
+                const errorMsg = result.error || "Unknown Python error";
+                const traceback = result.traceback || "";
+                console.error("❌ Python error:", errorMsg);
+                if (traceback) console.error("❌ Traceback:", traceback);
+                return reject(new Error(errorMsg));
+              }
+
+              console.log("✅ Python conversion successful");
+              resolve(result);
+            } else {
+              if (code === 0) {
+                resolve({ success: true, output: stdout });
+              } else {
+                reject(new Error(stderr || `Python exited with code ${code}`));
+              }
+            }
+          } catch (parseError) {
+            console.error("❌ JSON parse failed:", parseError.message);
+            if (code === 0) {
+              resolve({ success: true, output: stdout });
+            } else {
+              reject(
+                new Error(
+                  stderr || stdout || `Parse failed: ${parseError.message}`,
+                ),
+              );
+            }
+          }
+        });
+      };
+
+      tryPython(0);
+    });
+  }
+
+  // ============================================
+  // FALLBACK: Word to PDF (if LibreOffice fails)
+  // ============================================
+  async wordToPdfFallback(filePath, outputPath) {
+    try {
+      console.log("Using fallback method for Word to PDF...");
+
+      const docxBuffer = await fs.readFile(filePath);
+      const result = await mammoth.extractRawText({ buffer: docxBuffer });
+      const text = result.value;
+
+      const pdfDoc = await PDFDocument.create();
+      const font = await pdfDoc.embedFont("Helvetica");
+      const boldFont = await pdfDoc.embedFont("Helvetica-Bold");
+
+      const pageWidth = 595.28;
+      const pageHeight = 841.89;
+      const margin = 50;
+      const lineHeight = 14;
+      const fontSize = 11;
+
+      let currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
+      let yPosition = pageHeight - margin;
+
+      const paragraphs = text.split("\n").filter((p) => p.trim().length > 0);
+
+      for (const paragraph of paragraphs) {
+        const isHeading =
+          paragraph.length < 100 && paragraph === paragraph.toUpperCase();
+        const currentFont = isHeading ? boldFont : font;
+        const currentSize = isHeading ? 16 : fontSize;
+
+        const words = paragraph.split(" ");
+        let line = "";
+
+        for (const word of words) {
+          const testLine = line ? `${line} ${word}` : word;
+          const textWidth = currentFont.widthOfTextAtSize(testLine, currentSize);
+
+          if (textWidth > pageWidth - margin * 2) {
+            if (yPosition < margin + lineHeight) {
+              currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
+              yPosition = pageHeight - margin;
+            }
+
+            currentPage.drawText(line, {
+              x: margin,
+              y: yPosition,
+              size: currentSize,
+              font: currentFont,
+            });
+
+            yPosition -= lineHeight;
+            line = word;
+          } else {
+            line = testLine;
+          }
+        }
+
+        if (line) {
+          if (yPosition < margin + lineHeight) {
+            currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
+            yPosition = pageHeight - margin;
+          }
+
+          currentPage.drawText(line, {
+            x: margin,
+            y: yPosition,
+            size: currentSize,
+            font: currentFont,
+          });
+          yPosition -= lineHeight;
+        }
+
+        yPosition -= 5;
+      }
+
+      const pdfBytes = await pdfDoc.save();
+      await fs.writeFile(outputPath, pdfBytes);
+      console.log("Fallback conversion complete");
+    } catch (error) {
+      console.error("Fallback conversion failed:", error);
+      throw error;
+    }
+  }
+
+  // ============================================
+  // UTILITY: Create simple error PDF
+  // ============================================
+  async createErrorPdf(outputPath, message) {
+    try {
+      const pdfDoc = await PDFDocument.create();
+      const font = await pdfDoc.embedFont("Helvetica");
+
+      const page = pdfDoc.addPage([595.28, 841.89]);
+      page.drawText("Conversion Error", {
+        x: 50,
+        y: 800,
+        size: 20,
+        font: font,
+      });
+
+      page.drawText(message, {
+        x: 50,
+        y: 770,
+        size: 12,
+        font: font,
+        maxWidth: 500,
+      });
+
+      const pdfBytes = await pdfDoc.save();
+      await fs.writeFile(outputPath, pdfBytes);
+    } catch (error) {
+      console.error("Error creating error PDF:", error);
     }
   }
 }
