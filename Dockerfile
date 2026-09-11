@@ -28,8 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Verify LibreOffice installation
 RUN which soffice && soffice --version
 
-# Install Python packages
-RUN pip3 install --no-cache-dir \
+# Install Python packages with --break-system-packages flag
+RUN pip3 install --no-cache-dir --break-system-packages \
     pdf2docx \
     pymupdf \
     pdfplumber \
