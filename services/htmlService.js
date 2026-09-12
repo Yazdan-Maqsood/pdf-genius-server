@@ -1,6 +1,15 @@
-const puppeteer = require("puppeteer-core"); // ✅ Core version
 const fs = require("fs-extra");
 const path = require("path");
+
+let puppeteer = null;
+
+async function getPuppeteer() {
+  if (!puppeteer) {
+    const module = await import("puppeteer-core");
+    puppeteer = module.default || module;
+  }
+  return puppeteer;
+}
 
 class HtmlService {
   constructor() {
@@ -82,7 +91,7 @@ class HtmlService {
       }
 
       // ✅ Launch system Chrome
-      this.browser = await puppeteer.launch({
+      this.browser = await pup.launch({
         ...launchOptions,
         executablePath: executablePath,
       });
@@ -95,7 +104,6 @@ class HtmlService {
       console.log("✅ System browser launched:", executablePath);
       return this.browser;
     }
-
     return this.browser;
   }
 
