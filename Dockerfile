@@ -4,11 +4,11 @@ FROM node:18-bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# ✅ Skip Puppeteer Chromium download (uses system Chrome)
+# Skip Puppeteer Chromium download (uses system Chrome)
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 
-# ✅ Skip Sharp download (uses prebuilt binaries)
+# Skip Sharp download (uses prebuilt binaries)
 ENV SHARP_IGNORE_GLOBAL_LIBVIPS=1
 
 # Install system dependencies
@@ -54,17 +54,17 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 # Set working directory
 WORKDIR /app
 
-# ✅ Copy package files first (better caching)
+# Copy package files first (better caching)
 COPY package*.json ./
 
-# ✅ Optimized npm install
+# Optimized npm install
 RUN npm install --production --no-audit --no-fund --prefer-offline --loglevel=error
 
 # Copy source code
 COPY . .
 
-# Create required directories
-RUN mkdir -p uploads/pdf uploads/images/uploads/office uploads/processed \
+# Create required directories (FIXED TYPO)
+RUN mkdir -p uploads/pdf uploads/images uploads/office uploads/processed \
     temp/merge temp/split temp/compress temp/convert \
     logs
 

@@ -1,173 +1,229 @@
-const fs = require('fs-extra');
-const path = require('path');
-const { spawn } = require('child_process');
+const fs = require("fs-extra");
+const path = require("path");
+const { exec, spawn } = require("child_process");
+const util = require("util");
+const execPromise = util.promisify(exec);
 
 class PdfToImageService {
   /**
    * Main method: Convert PDF to images
    * Tries multiple methods in order of reliability:
-   * 1. pdf-poppler (most reliable - uses system pdftoppm)
+   * 1. pdftoppm (direct system command - most reliable)
    * 2. Python pdf2image (fallback - also uses pdftoppm)
    * 3. pdfjs-dist (last resort - may fail in Docker due to canvas)
    */
   async pdfToJpg(pdfFilePath, outputDir, options = {}) {
     try {
-      console.log('\n===== PDF TO IMAGE CONVERSION =====');
-      console.log('Input:', pdfFilePath);
-      console.log('Output dir:', outputDir);
-      console.log('Options:', options);
-      
+      console.log("\n===== PDF TO IMAGE CONVERSION =====");
+      console.log("Input:", pdfFilePath);
+      console.log("Output dir:", outputDir);
+      console.log("Options:", options);
+
       // Validate input
       if (!fs.existsSync(pdfFilePath)) {
         throw new Error(`Input PDF not found: ${pdfFilePath}`);
       }
-      
+
       const inputSize = fs.statSync(pdfFilePath).size;
-      console.log('Input size:', (inputSize / 1024).toFixed(2), 'KB');
-      
+      console.log("Input size:", (inputSize / 1024).toFixed(2), "KB");
+
       fs.ensureDirSync(outputDir);
-      
+
       // Get format from options
-      let format = (options.format || 'jpeg').toLowerCase();
-      if (format === 'jpg') format = 'jpeg';
-      console.log('Target format:', format);
-      
+      let format = (options.format || "jpeg").toLowerCase();
+      if (format === "jpg") format = "jpeg";
+      console.log("Target format:", format);
+
       // ============================================
-      // Method 1: pdf-poppler (MOST RELIABLE)
+      // Method 1: Direct pdftoppm command (MOST RELIABLE)
       // ============================================
       try {
-        console.log('\n📸 Attempting pdf-poppler method...');
-        const result = await this.convertWithPoppler(pdfFilePath, outputDir, options);
-        
+        console.log("\n📸 Attempting pdftoppm command...");
+        const result = await this.convertWithPoppler(
+          pdfFilePath,
+          outputDir,
+          options,
+        );
+
         if (result && result.length > 0) {
-          console.log('✅ pdf-poppler succeeded');
+          console.log("✅ pdftoppm succeeded");
           return result;
         }
       } catch (popplerError) {
-        console.error('❌ pdf-poppler failed:', popplerError.message);
+        console.error("❌ pdftoppm failed:", popplerError.message);
       }
-      
+
       // ============================================
       // Method 2: Python pdf2image (FALLBACK)
       // ============================================
       try {
-        console.log('\n🐍 Attempting Python pdf2image method...');
-        
+        console.log("\n🐍 Attempting Python pdf2image method...");
+
         // Clean output directory
         const files = fs.readdirSync(outputDir);
         for (const file of files) {
           await fs.remove(path.join(outputDir, file));
         }
-        
-        const result = await this.convertWithPython(pdfFilePath, outputDir, options);
-        
+
+        const result = await this.convertWithPython(
+          pdfFilePath,
+          outputDir,
+          options,
+        );
+
         if (result && result.length > 0) {
-          console.log('✅ Python pdf2image succeeded');
+          console.log("✅ Python pdf2image succeeded");
           return result;
         }
       } catch (pythonError) {
-        console.error('❌ Python pdf2image failed:', pythonError.message);
+        console.error("❌ Python pdf2image failed:", pythonError.message);
       }
-      
+
       // ============================================
       // Method 3: pdfjs-dist (LAST RESORT)
       // ============================================
       try {
-        console.log('\n📄 Attempting pdfjs-dist method...');
-        
+        console.log("\n📄 Attempting pdfjs-dist method...");
+
         // Clean output directory
         const files = fs.readdirSync(outputDir);
         for (const file of files) {
           await fs.remove(path.join(outputDir, file));
         }
-        
-        const result = await this.convertWithPdfJs(pdfFilePath, outputDir, options);
-        
+
+        const result = await this.convertWithPdfJs(
+          pdfFilePath,
+          outputDir,
+          options,
+        );
+
         if (result && result.length > 0) {
-          console.log('✅ pdfjs-dist succeeded');
+          console.log("✅ pdfjs-dist succeeded");
           return result;
         }
       } catch (pdfjsError) {
-        console.error('❌ pdfjs-dist failed:', pdfjsError.message);
+        console.error("❌ pdfjs-dist failed:", pdfjsError.message);
       }
-      
+
       // All methods failed
-      throw new Error('All PDF to image conversion methods failed. Please check server logs.');
-      
+      throw new Error(
+        "All PDF to image conversion methods failed. Please check server logs.",
+      );
     } catch (error) {
-      console.error('\n💥 PDF to image conversion error:', error);
+      console.error("\n💥 PDF to image conversion error:", error);
       throw error;
     }
   }
 
   /**
-   * Method 1: pdf-poppler (uses system pdftoppm)
-   * Most reliable - uses poppler-utils installed in Docker
+   * Method 1: Direct pdftoppm command (Linux + Windows compatible)
+   * Uses system pdftoppm tool installed via poppler-utils
    */
   async convertWithPoppler(pdfFilePath, outputDir, options = {}) {
-    console.log('Using pdf-poppler for conversion...');
-    
-    let pdfPoppler;
-    try {
-      pdfPoppler = require('pdf-poppler');
-    } catch (err) {
-      throw new Error('pdf-poppler package not installed. Run: npm install pdf-poppler');
+    console.log("Using direct pdftoppm command...");
+
+    // Normalize format
+    let format = (options.format || "jpeg").toLowerCase();
+    let pdftoppmFormat = "jpeg"; // pdftoppm uses 'jpeg' for JPG
+
+    if (format === "jpg" || format === "jpeg") {
+      pdftoppmFormat = "jpeg";
+    } else if (format === "png") {
+      pdftoppmFormat = "png";
     }
-    
-    // Get PDF info first
-    let pdfInfo;
-    try {
-      pdfInfo = await pdfPoppler.info(pdfFilePath);
-      console.log('PDF pages:', pdfInfo.pages);
-    } catch (infoError) {
-      console.error('Failed to get PDF info:', infoError.message);
-    }
-    
-    // Normalize format for pdf-poppler
-    let format = (options.format || 'jpeg').toLowerCase();
-    if (format === 'jpg') format = 'jpeg';
-    
+
     // Determine DPI from scale
     const scale = options.scale || 2.0;
-    const dpi = scale >= 3.0 ? 300 : (scale >= 2.0 ? 200 : 150);
-    
-    const opts = {
-      format: format,
-      out_dir: outputDir,
-      out_prefix: 'page',
-      page: null, // All pages
-      scale: dpi
-    };
-    
-    console.log('Poppler options:', opts);
-    
-    // Convert
-    await pdfPoppler.convert(pdfFilePath, opts);
-    
-    // Get generated files
-    const files = fs.readdirSync(outputDir).filter(f => {
-      const lower = f.toLowerCase();
-      if (format === 'png') {
-        return f.startsWith('page') && lower.endsWith('.png');
-      } else {
-        return f.startsWith('page') && (lower.endsWith('.jpg') || lower.endsWith('.jpeg'));
+    const dpi = scale >= 3.0 ? 300 : scale >= 2.0 ? 200 : 150;
+
+    // Output prefix (pdftoppm adds -1, -2, etc. automatically)
+    const outputPrefix = path.join(outputDir, "page");
+
+    // Build command
+    const command = `pdftoppm -${pdftoppmFormat} -r ${dpi} "${pdfFilePath}" "${outputPrefix}"`;
+
+    console.log("Running command:", command);
+
+    try {
+      const { stdout, stderr } = await execPromise(command, {
+        timeout: 180000, // 3 minutes
+        maxBuffer: 1024 * 1024 * 50,
+        windowsHide: true,
+      });
+
+      if (stderr && !stderr.toLowerCase().includes("warning")) {
+        console.log("pdftoppm stderr:", stderr.substring(0, 300));
       }
-    }).sort(); // Sort to maintain page order
-    
-    const outputPaths = files.map(f => path.join(outputDir, f));
-    
-    // Verify files exist and have content
-    for (const outputPath of outputPaths) {
-      const stats = fs.statSync(outputPath);
-      if (stats.size === 0) {
-        throw new Error(`Empty output file: ${outputPath}`);
+
+      // pdftoppm generates files like: page-01.jpg, page-02.jpg
+      const files = fs
+        .readdirSync(outputDir)
+        .filter((f) => {
+          const lower = f.toLowerCase();
+          if (pdftoppmFormat === "png") {
+            return f.startsWith("page") && lower.endsWith(".png");
+          } else {
+            return (
+              f.startsWith("page") &&
+              (lower.endsWith(".jpg") || lower.endsWith(".jpeg"))
+            );
+          }
+        })
+        .sort((a, b) => {
+          const numA = parseInt(a.match(/\d+/)?.[0] || 0);
+          const numB = parseInt(b.match(/\d+/)?.[0] || 0);
+          return numA - numB;
+        });
+
+      if (files.length === 0) {
+        throw new Error("pdftoppm did not produce any output files");
       }
+
+      // Rename files to page_001.jpg, page_002.jpg (consistent naming)
+      const outputPaths = [];
+      for (let i = 0; i < files.length; i++) {
+        const oldPath = path.join(outputDir, files[i]);
+        const ext = pdftoppmFormat === "png" ? "png" : "jpg";
+        const newFileName = `page_${String(i + 1).padStart(3, "0")}.${ext}`;
+        const newPath = path.join(outputDir, newFileName);
+
+        if (oldPath !== newPath) {
+          await fs.rename(oldPath, newPath);
+        }
+
+        // Verify file size
+        const stats = fs.statSync(newPath);
+        if (stats.size === 0) {
+          throw new Error(`Empty output file: ${newPath}`);
+        }
+
+        outputPaths.push(newPath);
+        console.log(
+          `✅ Page ${i + 1}: ${newFileName} (${(stats.size / 1024).toFixed(2)} KB)`,
+        );
+      }
+
+      console.log(
+        `✅ Converted ${outputPaths.length} page(s) to ${pdftoppmFormat.toUpperCase()}`,
+      );
+      console.log("==================================\n");
+
+      return outputPaths;
+    } catch (error) {
+      console.error("pdftoppm command failed:", error.message);
+
+      // Check if pdftoppm is installed
+      if (
+        error.message.includes("not found") ||
+        error.message.includes("is not recognized")
+      ) {
+        throw new Error(
+          "pdftoppm not installed. Install poppler-utils: apt-get install poppler-utils",
+        );
+      }
+
+      throw error;
     }
-    
-    console.log(`✅ Converted ${outputPaths.length} page(s) to ${format.toUpperCase()}`);
-    console.log('==================================\n');
-    
-    return outputPaths;
   }
 
   /**
@@ -175,108 +231,116 @@ class PdfToImageService {
    * Uses poppler-utils via Python
    */
   async convertWithPython(pdfFilePath, outputDir, options = {}) {
-    console.log('Using Python pdf2image for conversion...');
-    
+    console.log("Using Python pdf2image for conversion...");
+
     return new Promise((resolve, reject) => {
-      const pythonScript = path.resolve(__dirname, '..', 'python', 'pdf_to_image.py');
-      
+      const pythonScript = path.resolve(
+        __dirname,
+        "..",
+        "python",
+        "pdf_to_image.py",
+      );
+
       if (!fs.existsSync(pythonScript)) {
         return reject(new Error(`Python script not found: ${pythonScript}`));
       }
-      
+
       // Normalize format
-      let format = (options.format || 'jpeg').toLowerCase();
-      if (format === 'jpeg' || format === 'jpg') format = 'jpg';
-      
+      let format = (options.format || "jpeg").toLowerCase();
+      if (format === "jpeg" || format === "jpg") format = "jpg";
+
       // Determine DPI
       const scale = options.scale || 2.0;
-      const dpi = scale >= 3.0 ? 300 : (scale >= 2.0 ? 200 : 150);
-      
-      console.log('Python script:', pythonScript);
-      console.log('Format:', format, 'DPI:', dpi);
-      
+      const dpi = scale >= 3.0 ? 300 : scale >= 2.0 ? 200 : 150;
+
+      console.log("Python script:", pythonScript);
+      console.log("Format:", format, "DPI:", dpi);
+
       // Try python commands
-      const pythonCommands = ['python3', 'python', 'py'];
-      
+      const pythonCommands = ["python3", "python", "py"];
+
       const tryPython = (index) => {
         if (index >= pythonCommands.length) {
-          return reject(new Error('Python not found. Tried: python3, python, py'));
+          return reject(
+            new Error("Python not found. Tried: python3, python, py"),
+          );
         }
-        
+
         const pythonCmd = pythonCommands[index];
         console.log(`Trying: ${pythonCmd}`);
-        
-        const child = spawn(pythonCmd, [
-          pythonScript,
-          pdfFilePath,
-          outputDir,
-          format,
-          dpi.toString()
-        ], {
-          cwd: path.join(__dirname, '..'),
-          env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
-        });
-        
-        let stdout = '';
-        let stderr = '';
+
+        const child = spawn(
+          pythonCmd,
+          [pythonScript, pdfFilePath, outputDir, format, dpi.toString()],
+          {
+            cwd: path.join(__dirname, ".."),
+            env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+          },
+        );
+
+        let stdout = "";
+        let stderr = "";
         let spawnFailed = false;
-        
-        child.stdout.on('data', (data) => {
+
+        child.stdout.on("data", (data) => {
           const text = data.toString();
           stdout += text;
-          console.log('📤 Python stdout:', text.trim());
+          console.log("📤 Python stdout:", text.trim());
         });
-        
-        child.stderr.on('data', (data) => {
+
+        child.stderr.on("data", (data) => {
           const text = data.toString();
           stderr += text;
-          console.log('📥 Python stderr:', text.trim());
+          console.log("📥 Python stderr:", text.trim());
         });
-        
-        child.on('error', (error) => {
+
+        child.on("error", (error) => {
           spawnFailed = true;
-          if (error.code === 'ENOENT') {
+          if (error.code === "ENOENT") {
             tryPython(index + 1);
           } else {
             reject(new Error(`${pythonCmd} error: ${error.message}`));
           }
         });
-        
-        child.on('close', (code) => {
+
+        child.on("close", (code) => {
           if (spawnFailed) return;
-          
+
           console.log(`Python exit code: ${code}`);
-          
+
           try {
             // Parse JSON from stdout
             const jsonMatch = stdout.match(/\{[\s\S]*\}/);
             if (jsonMatch) {
               const result = JSON.parse(jsonMatch[0]);
-              
+
               if (!result.success) {
-                return reject(new Error(result.error || 'Python conversion failed'));
+                return reject(
+                  new Error(result.error || "Python conversion failed"),
+                );
               }
-              
+
               // Verify output files
               const outputPaths = result.output_paths || [];
               if (outputPaths.length === 0) {
-                return reject(new Error('No output files generated'));
+                return reject(new Error("No output files generated"));
               }
-              
+
               console.log(`✅ Python generated ${outputPaths.length} page(s)`);
               resolve(outputPaths);
             } else {
               if (code === 0) {
                 // Fallback: read files from output dir
-                const files = fs.readdirSync(outputDir)
-                  .filter(f => f.startsWith('page'))
+                const files = fs
+                  .readdirSync(outputDir)
+                  .filter((f) => f.startsWith("page"))
                   .sort()
-                  .map(f => path.join(outputDir, f));
-                
+                  .map((f) => path.join(outputDir, f));
+
                 if (files.length > 0) {
                   resolve(files);
                 } else {
-                  reject(new Error('No output files found'));
+                  reject(new Error("No output files found"));
                 }
               } else {
                 reject(new Error(stderr || `Python exited with code ${code}`));
@@ -287,7 +351,7 @@ class PdfToImageService {
           }
         });
       };
-      
+
       tryPython(0);
     });
   }
@@ -297,107 +361,117 @@ class PdfToImageService {
    * WARNING: This method requires 'canvas' package which may not work in all environments
    */
   async convertWithPdfJs(pdfFilePath, outputDir, options = {}) {
-    console.log('Using pdfjs-dist for conversion...');
-    
+    console.log("Using pdfjs-dist for conversion...");
+
     // Try to load canvas - if it fails, throw error
     let createCanvas;
     try {
-      const canvasModule = require('canvas');
+      const canvasModule = require("canvas");
       createCanvas = canvasModule.createCanvas;
-      
+
       if (!createCanvas) {
-        throw new Error('createCanvas not available in canvas module');
+        throw new Error("createCanvas not available in canvas module");
       }
     } catch (err) {
       throw new Error(`canvas package not available: ${err.message}`);
     }
-    
+
     let pdfjsLib;
     try {
-      pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+      pdfjsLib = require("pdfjs-dist/legacy/build/pdf.js");
     } catch (error) {
       try {
-        pdfjsLib = require('pdfjs-dist');
+        pdfjsLib = require("pdfjs-dist");
       } catch (err) {
-        throw new Error('pdfjs-dist not available: ' + error.message);
+        throw new Error("pdfjs-dist not available: " + error.message);
       }
     }
-    
+
     const data = new Uint8Array(await fs.readFile(pdfFilePath));
-    
+
     const loadingTask = pdfjsLib.getDocument({
       data,
       disableFontFace: true,
-      useSystemFonts: false
+      useSystemFonts: false,
     });
-    
+
     const pdf = await loadingTask.promise;
-    
-    console.log('PDF loaded. Pages:', pdf.numPages);
-    
+
+    console.log("PDF loaded. Pages:", pdf.numPages);
+
     const scale = options.scale || 2.0;
-    
+
     // Normalize format
-    let format = (options.format || 'jpeg').toLowerCase();
-    if (format === 'jpg' || format === 'jpeg') {
-      format = 'jpeg';
-    } else if (format === 'png') {
-      format = 'png';
+    let format = (options.format || "jpeg").toLowerCase();
+    if (format === "jpg" || format === "jpeg") {
+      format = "jpeg";
+    } else if (format === "png") {
+      format = "png";
     } else {
-      format = 'jpeg';
+      format = "jpeg";
     }
-    
+
     const quality = options.quality || 90;
-    
-    console.log('Format:', format, 'Quality:', quality, 'Scale:', scale);
-    
+
+    console.log("Format:", format, "Quality:", quality, "Scale:", scale);
+
     const outputPaths = [];
-    
+
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
       console.log(`Processing page ${pageNum}/${pdf.numPages}...`);
-      
+
       const page = await pdf.getPage(pageNum);
       const viewport = page.getViewport({ scale });
-      
+
       const canvas = createCanvas(viewport.width, viewport.height);
-      const context = canvas.getContext('2d');
-      
+      const context = canvas.getContext("2d");
+
       // White background
-      context.fillStyle = 'white';
+      context.fillStyle = "white";
       context.fillRect(0, 0, viewport.width, viewport.height);
-      
+
       const renderContext = {
         canvasContext: context,
         viewport: viewport,
-        background: 'white'
+        background: "white",
       };
-      
+
       await page.render(renderContext).promise;
-      
+
       // Save image
       let outputPath;
       let imageBuffer;
-      
-      if (format === 'png') {
-        outputPath = path.join(outputDir, `page_${String(pageNum).padStart(3, '0')}.png`);
-        imageBuffer = canvas.toBuffer('image/png');
+
+      if (format === "png") {
+        outputPath = path.join(
+          outputDir,
+          `page_${String(pageNum).padStart(3, "0")}.png`,
+        );
+        imageBuffer = canvas.toBuffer("image/png");
       } else {
-        outputPath = path.join(outputDir, `page_${String(pageNum).padStart(3, '0')}.jpg`);
-        imageBuffer = canvas.toBuffer('image/jpeg', {
+        outputPath = path.join(
+          outputDir,
+          `page_${String(pageNum).padStart(3, "0")}.jpg`,
+        );
+        imageBuffer = canvas.toBuffer("image/jpeg", {
           quality: quality / 100,
-          progressive: true
+          progressive: true,
         });
       }
-      
+
       await fs.writeFile(outputPath, imageBuffer);
       outputPaths.push(outputPath);
-      
-      console.log(`✅ Page ${pageNum} saved: ${path.basename(outputPath)} (${(imageBuffer.length / 1024).toFixed(2)} KB)`);
+
+      console.log(
+        `✅ Page ${pageNum} saved: ${path.basename(outputPath)} (${(imageBuffer.length / 1024).toFixed(2)} KB)`,
+      );
     }
-    
-    console.log(`\n✅ Converted ${outputPaths.length} page(s) to ${format.toUpperCase()}`);
-    console.log('==================================\n');
-    
+
+    console.log(
+      `\n✅ Converted ${outputPaths.length} page(s) to ${format.toUpperCase()}`,
+    );
+    console.log("==================================\n");
+
     return outputPaths;
   }
 }
