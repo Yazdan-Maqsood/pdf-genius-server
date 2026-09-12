@@ -8,6 +8,10 @@ Two modes:
 
 Usage: python pdf_to_ppt.py <input.pdf> <output.pptx> [mode]
 Mode: text (default) | image
+
+Limits:
+  - text mode:  Max 30 pages, recommended under 6 MB
+  - image mode: Max 100 pages, recommended under 30 MB
 """
 
 import sys
@@ -16,6 +20,14 @@ import json
 import traceback
 import platform
 import io
+import gc
+
+
+# ============================================================
+# CONFIGURATION LIMITS
+# ============================================================
+MAX_PAGES_TEXT_MODE = 30    # Editable text mode is memory-heavy
+MAX_PAGES_IMAGE_MODE = 100  # Image mode is lighter
 
 
 def is_scanned_pdf(pdf_path):
@@ -34,6 +46,19 @@ def is_scanned_pdf(pdf_path):
         return len(total_text) < 50
     except Exception:
         return False
+
+
+def get_pdf_page_count(pdf_path):
+    """Get total page count of PDF."""
+    try:
+        import pymupdf
+        doc = pymupdf.open(pdf_path)
+        count = len(doc)
+        doc.close()
+        return count
+    except Exception as e:
+        print(json.dumps({"error": f"Failed to get page count: {str(e)}"}), file=sys.stderr)
+        return 0
 
 
 def render_pdf_pages_as_images(pdf_path, output_dir, dpi=150):
@@ -55,9 +80,13 @@ def render_pdf_pages_as_images(pdf_path, output_dir, dpi=150):
             pix.save(image_path)
             image_paths.append(image_path)
             
+            # Free memory
+            pix = None
+            
             print(json.dumps({"info": f"Rendered page {page_num + 1}/{len(doc)}"}), file=sys.stderr)
         
         doc.close()
+        gc.collect()
         return image_paths
         
     except Exception as e:
@@ -66,7 +95,7 @@ def render_pdf_pages_as_images(pdf_path, output_dir, dpi=150):
 
 
 def extract_text_with_ocr(pdf_path):
-    """Extract text from scanned PDF using OCR."""
+    """Extract text from scanned PDF using OCR (memory-efficient)."""
     try:
         import pymupdf
         import pytesseract
@@ -87,16 +116,27 @@ def extract_text_with_ocr(pdf_path):
         
         for page_num in range(len(doc)):
             page = doc[page_num]
-            pix = page.get_pixmap(matrix=pymupdf.Matrix(2, 2))
-            img_data = pix.tobytes("png")
-            img = Image.open(io.BytesIO(img_data))
             
+            # ✅ Lower DPI for memory efficiency (150 instead of 200)
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(1.5, 1.5))
+            img_data = pix.tobytes("png")
+            
+            # ✅ Free pixmap immediately
+            pix = None
+            
+            img = Image.open(io.BytesIO(img_data))
             text = pytesseract.image_to_string(img)
             pages_text.append(text)
+            
+            # ✅ Free image immediately
+            img.close()
+            del img, img_data
+            gc.collect()
             
             print(json.dumps({"info": f"OCR page {page_num + 1}/{len(doc)}"}), file=sys.stderr)
         
         doc.close()
+        gc.collect()
         return pages_text
         
     except Exception as e:
@@ -129,8 +169,19 @@ def create_text_mode_ppt(pdf_path, output_path):
     from pptx.dml.color import RGBColor
     from pptx.enum.text import PP_ALIGN
     
+    # ✅ Check page count FIRST (before doing any heavy work)
+    total_pages = get_pdf_page_count(pdf_path)
+    print(json.dumps({"info": f"Total pages: {total_pages}"}), file=sys.stderr)
+    
+    if total_pages > MAX_PAGES_TEXT_MODE:
+        return {
+            "success": False,
+            "error": f"This PDF has {total_pages} pages. Editable Text mode supports maximum {MAX_PAGES_TEXT_MODE} pages. Please use 'Visual Design' mode for larger PDFs, or split your PDF into smaller files."
+        }
+    
     # Detect scanned PDF
     scanned = is_scanned_pdf(pdf_path)
+    print(json.dumps({"info": f"Scanned PDF: {scanned}"}), file=sys.stderr)
     
     # Extract text
     if scanned:
@@ -147,6 +198,7 @@ def create_text_mode_ppt(pdf_path, output_path):
     prs.slide_height = Inches(7.5)
     
     slide_count = 0
+    total_pages_text = len(pages_text)
     
     for page_num, page_text in enumerate(pages_text, 1):
         if not page_text or not page_text.strip():
@@ -224,10 +276,13 @@ def create_text_mode_ppt(pdf_path, output_path):
         )
         footer_frame = footer_box.text_frame
         footer_para = footer_frame.paragraphs[0]
-        footer_para.text = f"{slide_count} / {len(pages_text)}"
+        footer_para.text = f"{slide_count} / {total_pages_text}"
         footer_para.font.size = Pt(10)
         footer_para.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
         footer_para.alignment = PP_ALIGN.RIGHT
+        
+        # Free memory after each slide
+        gc.collect()
     
     if slide_count == 0:
         blank_layout = prs.slide_layouts[6]
@@ -253,6 +308,16 @@ def create_image_mode_ppt(pdf_path, output_path, output_dir):
     from pptx.dml.color import RGBColor
     from pptx.enum.text import PP_ALIGN
     import pymupdf
+    
+    # ✅ Check page count FIRST
+    total_pages = get_pdf_page_count(pdf_path)
+    print(json.dumps({"info": f"Total pages: {total_pages}"}), file=sys.stderr)
+    
+    if total_pages > MAX_PAGES_IMAGE_MODE:
+        return {
+            "success": False,
+            "error": f"This PDF has {total_pages} pages. Visual Design mode supports maximum {MAX_PAGES_IMAGE_MODE} pages. Please split your PDF into smaller files."
+        }
     
     # Create temp dir for images
     temp_img_dir = os.path.join(output_dir, f"temp_img_{os.getpid()}")
@@ -307,7 +372,7 @@ def create_image_mode_ppt(pdf_path, output_path, output_dir):
         slide = prs.slides.add_slide(blank_layout)
         slide_count += 1
         
-        # ✅ Add page image as slide background
+        # Add page image as slide background
         slide.shapes.add_picture(
             img_path, img_left, img_top,
             width=img_width, height=img_height
@@ -323,6 +388,8 @@ def create_image_mode_ppt(pdf_path, output_path, output_dir):
         footer_para.font.size = Pt(10)
         footer_para.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
         footer_para.alignment = PP_ALIGN.RIGHT
+        
+        gc.collect()
     
     prs.save(output_path)
     
