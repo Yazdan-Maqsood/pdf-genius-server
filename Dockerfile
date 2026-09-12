@@ -23,10 +23,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto \
     fonts-noto-cjk \
     ca-certificates \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Verify LibreOffice installation
 RUN which soffice && soffice --version
+
+# ✅ Verify Poppler installation (for PDF to JPG)
+RUN which pdftoppm && pdftoppm -v
 
 # Install Python packages with --break-system-packages flag
 RUN pip3 install --no-cache-dir --break-system-packages \
@@ -37,7 +41,8 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     python-docx \
     openpyxl \
     pytesseract \
-    Pillow
+    Pillow \
+    pdf2image
 
 # Set working directory
 WORKDIR /app
