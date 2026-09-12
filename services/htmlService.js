@@ -1,4 +1,4 @@
-const puppeteer = require("puppeteer");
+const puppeteer = require("puppeteer-core"); // ✅ Core version
 const fs = require("fs-extra");
 const path = require("path");
 
@@ -11,7 +11,7 @@ class HtmlService {
     if (!this.browser) {
       console.log("Launching Puppeteer browser...");
 
-      // ✅ Memory-optimized Chrome flags for Render free tier
+      // Memory-optimized Chrome flags
       const launchOptions = {
         headless: "new",
         args: [
@@ -22,8 +22,8 @@ class HtmlService {
           "--no-first-run",
           "--no-zygote",
           "--disable-gpu",
-          "--single-process", // ✅ Single process (memory efficient)
-          "--no-remote-debugging-pipe", // ✅ Save memory
+          "--single-process",
+          "--no-remote-debugging-pipe",
           "--disable-background-networking",
           "--disable-background-timer-throttling",
           "--disable-backgrounding-occluded-windows",
@@ -48,28 +48,11 @@ class HtmlService {
           "--use-mock-keychain",
           "--window-size=1920,1080",
         ],
-        // ✅ Timeout settings
         protocolTimeout: 180000,
       };
 
-      // Try bundled Chromium first
-      try {
-        this.browser = await puppeteer.launch(launchOptions);
-        console.log("✅ Puppeteer bundled browser launched");
-
-        // ✅ Handle browser disconnect
-        this.browser.on("disconnected", () => {
-          console.log("⚠️ Browser disconnected");
-          this.browser = null;
-        });
-
-        return this.browser;
-      } catch (error) {
-        console.error("❌ Failed to launch bundled Chromium:", error.message);
-      }
-
-      // Fallback: system Chrome/Chromium
-      console.log("Trying to find system Chrome/Chromium...");
+      // ✅ Find system Chrome/Chromium (no bundled)
+      console.log("Finding system Chrome/Chromium...");
 
       const possiblePaths = [
         "/usr/bin/google-chrome",
@@ -98,12 +81,12 @@ class HtmlService {
         );
       }
 
+      // ✅ Launch system Chrome
       this.browser = await puppeteer.launch({
         ...launchOptions,
         executablePath: executablePath,
       });
 
-      // ✅ Handle disconnect
       this.browser.on("disconnected", () => {
         console.log("⚠️ Browser disconnected");
         this.browser = null;
@@ -126,10 +109,8 @@ class HtmlService {
       console.log("Output:", outputPath);
       console.log("Options:", options);
 
-      // Read HTML content
       let htmlContent = await fs.readFile(htmlFilePath, "utf-8");
 
-      // If HTML doesn't have proper structure, wrap it
       if (
         !htmlContent.toLowerCase().includes("<!doctype html") &&
         !htmlContent.toLowerCase().includes("<html")
@@ -150,11 +131,9 @@ class HtmlService {
       `;
       }
 
-      // Get browser
       browser = await this.getBrowser();
       page = await browser.newPage();
 
-      // Set viewport
       const pageSize = options.pageSize || "A4";
       const orientation = options.orientation || "portrait";
 
@@ -173,17 +152,14 @@ class HtmlService {
         deviceScaleFactor: 1,
       });
 
-      // Set content
       console.log("Setting HTML content...");
       await page.setContent(htmlContent, {
         waitUntil: ["load", "networkidle0"],
         timeout: 60000,
       });
 
-      // Wait a bit for any async content
       await new Promise((resolve) => setTimeout(resolve, 500));
 
-      // Generate PDF
       console.log("Generating PDF...");
       const pdfOptions = {
         path: outputPath,
@@ -201,11 +177,9 @@ class HtmlService {
 
       await page.pdf(pdfOptions);
 
-      // Close page
       await page.close();
       page = null;
 
-      // Verify output
       if (fs.existsSync(outputPath)) {
         const stats = fs.statSync(outputPath);
         console.log("✅ PDF created:", (stats.size / 1024).toFixed(2), "KB");
@@ -213,7 +187,6 @@ class HtmlService {
         throw new Error("PDF file was not created");
       }
 
-      // ✅ Close browser to free memory
       console.log("Closing browser to free memory...");
       await this.closeBrowser();
       browser = null;
@@ -222,21 +195,15 @@ class HtmlService {
     } catch (error) {
       console.error("❌ HTML to PDF conversion failed:", error);
 
-      // Close page if open
       if (page) {
         try {
           await page.close();
-        } catch (closeError) {
-          // Ignore
-        }
+        } catch (closeError) {}
       }
 
-      // ✅ Also close browser on error
       try {
         await this.closeBrowser();
-      } catch (closeError) {
-        // Ignore
-      }
+      } catch (closeError) {}
       browser = null;
 
       throw error;
@@ -279,7 +246,6 @@ class HtmlService {
       await page.close();
       page = null;
 
-      // ✅ Close browser to free memory
       console.log("Closing browser to free memory...");
       await this.closeBrowser();
       browser = null;
@@ -291,17 +257,12 @@ class HtmlService {
       if (page) {
         try {
           await page.close();
-        } catch (closeError) {
-          // Ignore
-        }
+        } catch (closeError) {}
       }
 
-      // ✅ Also close browser on error
       try {
         await this.closeBrowser();
-      } catch (closeError) {
-        // Ignore
-      }
+      } catch (closeError) {}
       browser = null;
 
       throw error;
@@ -339,7 +300,6 @@ class HtmlService {
       await page.close();
       page = null;
 
-      // ✅ Close browser to free memory
       console.log("Closing browser to free memory...");
       await this.closeBrowser();
       browser = null;
@@ -351,17 +311,12 @@ class HtmlService {
       if (page) {
         try {
           await page.close();
-        } catch (closeError) {
-          // Ignore
-        }
+        } catch (closeError) {}
       }
 
-      // ✅ Also close browser on error
       try {
         await this.closeBrowser();
-      } catch (closeError) {
-        // Ignore
-      }
+      } catch (closeError) {}
       browser = null;
 
       throw error;
