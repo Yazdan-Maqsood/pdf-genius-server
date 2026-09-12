@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const convertController = require('../controllers/convertController');
-const { uploadMultiple } = require('../middleware/upload');
+const { uploadMultiple, validateOfficeFileSize } = require('../middleware/upload');
 const { validateFileUpload } = require('../middleware/validation');
 const { uploadLimiter } = require('../middleware/rateLimiter');
 
