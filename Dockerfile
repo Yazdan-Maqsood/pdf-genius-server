@@ -4,6 +4,13 @@ FROM node:18-bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
+# ✅ Skip Puppeteer Chromium download (uses system Chrome)
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
+# ✅ Skip Sharp download (uses prebuilt binaries)
+ENV SHARP_IGNORE_GLOBAL_LIBVIPS=1
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice \
@@ -29,10 +36,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Verify LibreOffice installation
 RUN which soffice && soffice --version
 
-# ✅ Verify Poppler installation (for PDF to JPG)
+# Verify Poppler installation
 RUN which pdftoppm && pdftoppm -v
 
-# Install Python packages with --break-system-packages flag
+# Install Python packages
 RUN pip3 install --no-cache-dir --break-system-packages \
     pdf2docx \
     pymupdf \
@@ -47,17 +54,17 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 # Set working directory
 WORKDIR /app
 
-# Copy package files
+# ✅ Copy package files first (better caching)
 COPY package*.json ./
 
-# Install Node dependencies
-RUN npm install --production
+# ✅ Optimized npm install
+RUN npm install --production --no-audit --no-fund --prefer-offline --loglevel=error
 
 # Copy source code
 COPY . .
 
 # Create required directories
-RUN mkdir -p uploads/pdf uploads/images uploads/office uploads/processed \
+RUN mkdir -p uploads/pdf uploads/images/uploads/office uploads/processed \
     temp/merge temp/split temp/compress temp/convert \
     logs
 
